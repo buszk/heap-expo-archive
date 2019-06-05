@@ -1,0 +1,5 @@
+*.so
+*.o
+*.ll
+*.bc
+test-instr
