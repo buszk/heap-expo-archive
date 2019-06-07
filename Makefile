@@ -21,7 +21,7 @@ PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so
 
 all: $(PROGS) test_build
 
-LLVMHeapExpo.so: heap-expo.cpp
+LLVMHeapExpo.so: heap-expo-pass.cpp
 	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
 
 heap-expo-rt.o: heap-expo-rt.o.cpp
