@@ -6,41 +6,46 @@
 
 using namespace std;
 
+#define EXT_C extern "C"
+
 map<uintptr_t, size_t> memory_objects;
 map<uintptr_t, set<uintptr_t>> in_edges; // map an object to those who points to it
 map<uintptr_t, set<uintptr_t>> out_edges; // map an object to the objects it points to
 unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the object addr 
 
-inline void alloc_hook_(void* ptr_, size_t size) {
-    uintptr_t ptr = (uintptr_t)ptr_;
+inline void alloc_hook_(uintptr_t ptr, size_t size) {
     memory_objects[ptr] = size;
 }
 
-void alloc_hook(void* ptr_, size_t size) {
-    alloc_hook_(ptr_, size);
+EXT_C void alloc_hook(char* ptr_, size_t size) {
+    uintptr_t ptr = (uintptr_t)ptr_;
+    printf("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
+    alloc_hook_(ptr, size);
 }
 
-inline void dealloc_hook_(void* ptr_) {
-    uintptr_t ptr = (uintptr_t)ptr_;
+inline void dealloc_hook_(uintptr_t ptr) {
     auto it = memory_objects.find(ptr);
     if (it != memory_objects.end()) {
         memory_objects.erase(it);
     }
 }
 
-void dealloc_hook(void* ptr_) {
-    dealloc_hook_(ptr_);
+EXT_C void dealloc_hook(char* ptr_) {
+    uintptr_t ptr = (uintptr_t)ptr_;
+    printf("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
+    dealloc_hook_(ptr);
 }
 
-void realloc_hook(void* oldptr_, void* newptr_, size_t newsize) {
+EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
+    printf("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     if (oldptr == newptr) {
         memory_objects[newptr] = newsize;
         return;
     }
     size_t oldsize = memory_objects[oldptr];
-    alloc_hook_(newptr_, newsize);
+    alloc_hook_(newptr, newsize);
 
     out_edges[newptr] = out_edges[oldptr];
     if (!out_edges.erase(oldptr)) abort();
@@ -64,7 +69,7 @@ void realloc_hook(void* oldptr_, void* newptr_, size_t newsize) {
         }
     }
 
-    dealloc_hook_(oldptr_);
+    dealloc_hook_(oldptr);
 }
 
 /*

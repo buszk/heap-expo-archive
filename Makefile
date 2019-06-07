@@ -10,7 +10,7 @@ CXXFLAGS   ?= -O3 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 			 -Wno-variadic-macros
 
-LDFLAGS  += heap-expo-rt.o -lstdc++ # force c++ linker
+INST_LFL    = $(LDFLAGS) heap-expo-rt.o -lstdc++ # force c++ linker
 
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS)
 CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
@@ -28,7 +28,7 @@ heap-expo-rt.o: heap-expo-rt.o.cpp
 	$(CXX) $(CXXFLAGS) -fPIC -c $< -o $@
 
 test_build: $(PROGS)
-	$(CC) $(PASS_CFL) $(CFLAGS) ./test-instr.c -o test-instr $(LDFLAGS)
+	$(CC) $(PASS_CFL) $(CFLAGS) ./test-instr.c -o test-instr $(INST_LFL)
 
 clean:
 	rm -f $(PROGS) ./test-instr
