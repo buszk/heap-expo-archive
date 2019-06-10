@@ -24,6 +24,8 @@ char** strings = 0;
 size_t size = 0;
 size_t capacity = 0;
 
+void print_heap();
+
 int main(int argc, char** argv) {
 
   char buf[16] = {0};
@@ -43,10 +45,14 @@ int main(int argc, char** argv) {
       strings[size++] = tmp;
     }
   }
+  print_heap();
   printf("Here are your strings:\n");
-  for (int i = 0; strings[i] && i < size; i++) {
+  for (int i = 0; strings && strings[i] && i < size; i++) {
     printf("%s\n", strings[i]);
+    //free(strings[i]);
   }
+  strings = 0;
+
 
   exit(0);
 

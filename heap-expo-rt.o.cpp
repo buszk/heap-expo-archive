@@ -13,6 +13,34 @@ map<uintptr_t, set<uintptr_t>> in_edges; // map an object to those who points to
 map<uintptr_t, set<uintptr_t>> out_edges; // map an object to the objects it points to
 unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the object addr 
 
+void print_memory_objects() {
+    printf("Objects List:\n");
+    for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
+        printf("Heap Object: %016lx:%016lx\n", it->first, it->second);
+    }
+}
+
+void print_edges() {
+    printf("Edges List:\n");
+    for (auto it = out_edges.begin(); it != out_edges.end(); it++) {
+        for (uintptr_t obj: out_edges[it->first]) {
+            printf("Heap Edge: %016lx->%016lx\n", it->first, obj);
+        }
+    }
+}
+
+EXT_C void print_heap() {
+    print_memory_objects();
+    print_edges();
+}
+
+/* 
+ * XXX: Destructor not working because of freeing of heap memory */
+void __attribute__((destructor(1000000))) fini_rt(void) {
+    print_memory_objects();
+    print_edges();
+}
+
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
     memory_objects[ptr] = size;
 }
@@ -89,7 +117,15 @@ uintptr_t get_object_addr(uintptr_t addr) {
     return 0;
 }
 
-extern "C" void regptr(char* ptr_loc_, char* ptr_val_) {
+inline void deregptr_(uintptr_t ptr_loc) {
+    auto it = ptr_record.find(ptr_loc);
+    if (it != ptr_record.end()) {
+        if(!in_edges[it->second].erase(ptr_loc)) abort();
+        ptr_record.erase(it);
+    }
+}
+
+EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
     uintptr_t ptr_val= (uintptr_t)ptr_val_;
     
@@ -99,16 +135,20 @@ extern "C" void regptr(char* ptr_loc_, char* ptr_val_) {
     uintptr_t ptr_obj_addr = get_object_addr(ptr_loc);
     if (obj_addr) printf("This is a recorded object ptr\n");
     if (ptr_obj_addr) printf("This ptr is in a recoreded object\n");
-    auto it = ptr_record.find(ptr_loc);
-    /* We remove the previous record if exists */
-    if (it != ptr_record.end()) {
-        if(!in_edges[it->second].erase(ptr_loc)) abort();
-        ptr_record.erase(it);
-    }
+    
+    deregptr_(ptr_loc);
 
     if (obj_addr && ptr_obj_addr) {
         in_edges[obj_addr].insert(ptr_loc);
         out_edges[ptr_obj_addr].insert(obj_addr);
         ptr_record[ptr_loc] = obj_addr;
     }
+}
+
+EXT_C void deregptr(char* ptr_loc_) {
+    uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
+
+    printf("[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);
+    deregptr_(ptr_loc);
+
 }

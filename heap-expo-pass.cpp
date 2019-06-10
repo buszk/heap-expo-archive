@@ -37,7 +37,8 @@ struct HeapExpo : public FunctionPass {
     HeapExpo() : FunctionPass(ID) {}
 
     bool runOnFunction(Function &F) override {
-        if (F.getName() == "regptr") return false;
+//        if (F.getName() == "regptr") return false;
+//        if (F.getName() == "deregptr") return false;
         Module *M = F.getParent();
         errs() << "HeapExpo: ";
         errs().write_escaped(F.getName()) << '\n';
@@ -48,21 +49,37 @@ struct HeapExpo : public FunctionPass {
                 errs() << "Store instruction: " << *I << "\n";
                 StoreInst *SI = dyn_cast<StoreInst> (I);
                 if (SI->getValueOperand()->getType()->isPointerTy()) {
-                    errs() << "Value is a ptr\n";
-                    Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M));
-                    Function *regptr = cast<Function>(regptr_def);
-                    regptr->setCallingConv(CallingConv::C);
-                    std::vector <Value*> Args;
-                    CastInst *cast_loc =
-                        CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
-                    cast_loc->insertAfter(I);
-                    Args.push_back((Value*)cast_loc);
-                    CastInst *cast_val =
-                        CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
-                    cast_val->insertAfter(cast_loc);
-                    Args.push_back((Value*)cast_val);
-                    CallInst *regptr_call = CallInst::Create(regptr, Args, "");
-                    regptr_call->insertAfter(cast_val);
+                    if (isa<ConstantPointerNull>(SI->getValueOperand())) {
+                        errs() << "Value is a nullptr\n";
+                        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M));
+                        Function *deregptr = cast<Function>(deregptr_def);
+                        deregptr->setCallingConv(CallingConv::C);
+                        std::vector <Value*> Args;
+                        CastInst *cast_loc =
+                            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
+                        cast_loc->insertAfter(I);
+                        Args.push_back((Value*)cast_loc);
+                        CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
+                        deregptr_call->insertAfter(cast_loc);
+
+                    } else {
+                        errs() << "Value is a ptr\n";
+                        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M));
+                        Function *regptr = cast<Function>(regptr_def);
+                        regptr->setCallingConv(CallingConv::C);
+                        std::vector <Value*> Args;
+                        CastInst *cast_loc =
+                            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
+                        cast_loc->insertAfter(I);
+                        Args.push_back((Value*)cast_loc);
+                        CastInst *cast_val =
+                            CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
+                        cast_val->insertAfter(cast_loc);
+                        Args.push_back((Value*)cast_val);
+                        CallInst *regptr_call = CallInst::Create(regptr, Args, "");
+                        regptr_call->insertAfter(cast_val);
+
+                    }
 
                 }
             }
