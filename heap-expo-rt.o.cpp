@@ -3,28 +3,45 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unistd.h>
+#include <stdarg.h>
+
+#include "rt-include.h"
+
+#define PRINTF __printf
 
 using namespace std;
 
-#define EXT_C extern "C"
+he_map<uintptr_t, size_t> memory_objects;
+he_map<uintptr_t, he_set<uintptr_t>> in_edges; // map an object to those who points to it
+he_map<uintptr_t, he_set<uintptr_t>> out_edges; // map an object to the objects it points to
+he_unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the object addr 
 
-map<uintptr_t, size_t> memory_objects;
-map<uintptr_t, set<uintptr_t>> in_edges; // map an object to those who points to it
-map<uintptr_t, set<uintptr_t>> out_edges; // map an object to the objects it points to
-unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the object addr 
+
+void __printf(const char * format, ...) {
+    int n;
+    char str[256] = {0};
+    va_list args;
+    va_start(args, format);
+    n = vsnprintf(str, 256, format, args);
+    va_end(args);
+    if (!(n = write(1, str, n))) 
+        abort();
+}
+
 
 void print_memory_objects() {
-    printf("Objects List:\n");
+    PRINTF("Objects List:\n");
     for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
-        printf("Heap Object: %016lx:%016lx\n", it->first, it->second);
+        PRINTF("Heap Object: %016lx:%016lx\n", it->first, it->second);
     }
 }
 
 void print_edges() {
-    printf("Edges List:\n");
+    PRINTF("Edges List:\n");
     for (auto it = out_edges.begin(); it != out_edges.end(); it++) {
         for (uintptr_t obj: out_edges[it->first]) {
-            printf("Heap Edge: %016lx->%016lx\n", it->first, obj);
+            PRINTF("Heap Edge: %016lx->%016lx\n", it->first, obj);
         }
     }
 }
@@ -34,12 +51,23 @@ EXT_C void print_heap() {
     print_edges();
 }
 
+void __attribute__((constructor)) init_rt(void) {
+    new(&memory_objects) he_map<uintptr_t, size_t>;
+    new(&in_edges) he_map<uintptr_t, he_set<uintptr_t>>;
+    new(&out_edges) he_map<uintptr_t, he_set<uintptr_t>>;
+    new(&ptr_record) he_unordered_map<uintptr_t, uintptr_t>;
+
+}
+
 /* 
- * XXX: Destructor not working because of freeing of heap memory */
-void __attribute__((destructor(1000000))) fini_rt(void) {
+ * XXX: Destructor not working because of freeing of heap memory 
+ */
+/*
+void __attribute__((destructor(1000000))) fini_rt(void) 
     print_memory_objects();
     print_edges();
 }
+*/
 
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
     memory_objects[ptr] = size;
@@ -47,7 +75,7 @@ inline void alloc_hook_(uintptr_t ptr, size_t size) {
 
 EXT_C void alloc_hook(char* ptr_, size_t size) {
     uintptr_t ptr = (uintptr_t)ptr_;
-    printf("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
+    PRINTF("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
     alloc_hook_(ptr, size);
 }
 
@@ -60,14 +88,14 @@ inline void dealloc_hook_(uintptr_t ptr) {
 
 EXT_C void dealloc_hook(char* ptr_) {
     uintptr_t ptr = (uintptr_t)ptr_;
-    printf("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
+    PRINTF("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
     dealloc_hook_(ptr);
 }
 
 EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
-    printf("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
+    PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     if (oldptr == newptr) {
         memory_objects[newptr] = newsize;
         return;
@@ -129,12 +157,12 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
     uintptr_t ptr_val= (uintptr_t)ptr_val_;
     
-    printf("[HeapExpo][regptr]: loc:%016lx val:%016lx\n", ptr_loc, ptr_val);
+    PRINTF("[HeapExpo][regptr]: loc:%016lx val:%016lx\n", ptr_loc, ptr_val);
 
     uintptr_t obj_addr = get_object_addr(ptr_val);
     uintptr_t ptr_obj_addr = get_object_addr(ptr_loc);
-    if (obj_addr) printf("This is a recorded object ptr\n");
-    if (ptr_obj_addr) printf("This ptr is in a recoreded object\n");
+    if (obj_addr) PRINTF("This is a recorded object ptr\n");
+    if (ptr_obj_addr) PRINTF("This ptr is in a recoreded object\n");
     
     deregptr_(ptr_loc);
 
@@ -148,7 +176,9 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
 EXT_C void deregptr(char* ptr_loc_) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
 
-    printf("[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);
+    PRINTF("[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);
     deregptr_(ptr_loc);
 
 }
+
+#undef PRINTF

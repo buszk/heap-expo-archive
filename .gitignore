@@ -3,4 +3,6 @@
 *.ll
 *.bc
 *.s
+*.txt
+.gdb_history
 test-instr

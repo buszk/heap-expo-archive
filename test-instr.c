@@ -49,7 +49,10 @@ int main(int argc, char** argv) {
   printf("Here are your strings:\n");
   for (int i = 0; strings && strings[i] && i < size; i++) {
     printf("%s\n", strings[i]);
-    //free(strings[i]);
+  }
+
+  if (strings && strings[0]) {
+    free(strings[0]);
   }
   strings = 0;
 
