@@ -24,6 +24,9 @@ char** strings = 0;
 size_t size = 0;
 size_t capacity = 0;
 
+char* history[5] = {0};
+int history_ind = 0;
+
 void print_heap();
 
 int main(int argc, char** argv) {
@@ -43,6 +46,7 @@ int main(int argc, char** argv) {
       char* tmp = malloc(res+1);
       memcpy(tmp, buf, res);
       strings[size++] = tmp;
+      history[history_ind++%5] = tmp;
     }
   }
   print_heap();

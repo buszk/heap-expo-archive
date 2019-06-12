@@ -17,6 +17,8 @@ he_map<uintptr_t, he_set<uintptr_t>> in_edges; // map an object to those who poi
 he_map<uintptr_t, he_set<uintptr_t>> out_edges; // map an object to the objects it points to
 he_unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the object addr 
 
+bool he_initialized = false;
+
 
 void __printf(const char * format, ...) {
     int n;
@@ -51,12 +53,24 @@ EXT_C void print_heap() {
     print_edges();
 }
 
-void __attribute__((constructor)) init_rt(void) {
+EXT_C void global_hook(char* addr, size_t size) {
+    if (!he_initialized) return;
+    uintptr_t ptr = (uintptr_t)addr;
+    PRINTF("[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
+    memory_objects[ptr] = size;
+}
+
+EXT_C void __attribute__((visibility ("hidden"), constructor (0))) init_global_variables() {
+    printf("XXX\n");
+    return;
+}
+
+void __attribute__((constructor (-1))) init_rt(void) {
     new(&memory_objects) he_map<uintptr_t, size_t>;
     new(&in_edges) he_map<uintptr_t, he_set<uintptr_t>>;
     new(&out_edges) he_map<uintptr_t, he_set<uintptr_t>>;
     new(&ptr_record) he_unordered_map<uintptr_t, uintptr_t>;
-
+    he_initialized = true;
 }
 
 /* 
@@ -74,6 +88,7 @@ inline void alloc_hook_(uintptr_t ptr, size_t size) {
 }
 
 EXT_C void alloc_hook(char* ptr_, size_t size) {
+    if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
     alloc_hook_(ptr, size);
@@ -87,12 +102,14 @@ inline void dealloc_hook_(uintptr_t ptr) {
 }
 
 EXT_C void dealloc_hook(char* ptr_) {
+    if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
     dealloc_hook_(ptr);
 }
 
 EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
+    if (!he_initialized) return;
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
     PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
