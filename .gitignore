@@ -6,3 +6,4 @@
 *.txt
 .gdb_history
 test-instr
+test-instr-cxx

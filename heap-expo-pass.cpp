@@ -158,14 +158,33 @@ struct HeapExpoGlobalTracker : public ModulePass {
 };
 struct HeapExpo : public FunctionPass {
     static char ID;
-    HeapExpo() : FunctionPass(ID) {}
+    bool initialized;
+    Function *regptr, *deregptr;
+    Module *M;
+
+    HeapExpo() : FunctionPass(ID) { initialized = false; }
+
+    void initialize() {
+        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M));
+        deregptr = cast<Function>(deregptr_def);
+        deregptr->setCallingConv(CallingConv::C);
+        
+        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M));
+        regptr = cast<Function>(regptr_def);
+        regptr->setCallingConv(CallingConv::C);
+
+        initialized = true;
+
+    }
 
     bool runOnFunction(Function &F) override {
 //        if (F.getName() == "regptr") return false;
 //        if (F.getName() == "deregptr") return false;
-        Module *M = F.getParent();
+        M = F.getParent();
         errs() << "HeapExpo: ";
         errs().write_escaped(F.getName()) << '\n';
+        if (!initialized) 
+            initialize();
         for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
             Instruction *I = &*i;
             if (isa<StoreInst> (I)) {
@@ -176,38 +195,42 @@ struct HeapExpo : public FunctionPass {
                         errs() << "Storing to global var\n" ;
                     if (isa<ConstantPointerNull>(SI->getValueOperand())) {
                         errs() << "Value is a nullptr\n";
-                        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M));
-                        Function *deregptr = cast<Function>(deregptr_def);
-                        deregptr->setCallingConv(CallingConv::C);
+
+                        DebugLoc DLoc = I->getDebugLoc();
+                        if (!DLoc)
+                            DLoc = DebugLoc::get(0, 0, (MDNode*)F.getSubprogram());
+
                         std::vector <Value*> Args;
                         CastInst *cast_loc =
                             CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
                         cast_loc->insertAfter(I);
-                        cast_loc->setDebugLoc(I->getDebugLoc());
+                        cast_loc->setDebugLoc(DLoc);
                         Args.push_back((Value*)cast_loc);
                         CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
                         deregptr_call->insertAfter(cast_loc);
-                        deregptr_call->setDebugLoc(I->getDebugLoc());
+                        deregptr_call->setDebugLoc(DLoc);
 
                     } else {
                         errs() << "Value is a ptr\n";
-                        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M));
-                        Function *regptr = cast<Function>(regptr_def);
-                        regptr->setCallingConv(CallingConv::C);
+
+                        DebugLoc DLoc = I->getDebugLoc();
+                        if (!DLoc)
+                            DLoc = DebugLoc::get(0, 0, (MDNode*)F.getSubprogram());
+
                         std::vector <Value*> Args;
                         CastInst *cast_loc =
                             CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
                         cast_loc->insertAfter(I);
-                        cast_loc->setDebugLoc(I->getDebugLoc());
+                        cast_loc->setDebugLoc(DLoc);
                         Args.push_back((Value*)cast_loc);
                         CastInst *cast_val =
                             CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
                         cast_val->insertAfter(cast_loc);
-                        cast_val->setDebugLoc(I->getDebugLoc());
+                        cast_val->setDebugLoc(DLoc);
                         Args.push_back((Value*)cast_val);
                         CallInst *regptr_call = CallInst::Create(regptr, Args, "");
                         regptr_call->insertAfter(cast_val);
-                        regptr_call->setDebugLoc(I->getDebugLoc());
+                        regptr_call->setDebugLoc(DLoc);
 
 
 

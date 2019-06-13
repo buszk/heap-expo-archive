@@ -33,6 +33,7 @@ malloc-rt.o: malloc-rt.o.cpp
 
 test_build: $(PROGS)
 	$(CC) $(PASS_CFL) $(CFLAGS) $(INST_LFL) ./test-instr.c -o test-instr
+	$(CXX) $(PASS_CFL) $(CXXFLAGS) $(INST_LFL) ./test-instr-cxx.cpp -o test-instr-cxx
 
 clean:
 	rm -f $(PROGS) ./test-instr
