@@ -60,16 +60,12 @@ EXT_C void global_hook(char* addr, size_t size) {
     memory_objects[ptr] = size;
 }
 
-EXT_C void __attribute__((visibility ("hidden"), constructor (0))) init_global_variables() {
-    printf("XXX\n");
-    return;
-}
-
 void __attribute__((constructor (-1))) init_rt(void) {
     new(&memory_objects) he_map<uintptr_t, size_t>;
     new(&in_edges) he_map<uintptr_t, he_set<uintptr_t>>;
     new(&out_edges) he_map<uintptr_t, he_set<uintptr_t>>;
     new(&ptr_record) he_unordered_map<uintptr_t, uintptr_t>;
+    printf("STL objects initialized\n");
     he_initialized = true;
 }
 

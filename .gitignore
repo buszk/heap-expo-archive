@@ -6,3 +6,6 @@
 *.txt
 .gdb_history
 test-instr
+test-instr-cxx
+heap-expo-clang
+heap-expo-clang++

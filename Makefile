@@ -16,11 +16,15 @@ INST_LFL    = $(LDFLAGS) heap-expo-rt.o malloc-rt.o -lstdc++ # force c++ linker
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS) -Iinclude
 CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
 
-PROGS       = LLVMHeapExpo.so heap-expo-rt.o malloc-rt.o
+PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o malloc-rt.o
 
 PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so -flto
 
 all: $(PROGS) test_build
+
+heap-expo-clang: heap-expo-clang.cpp
+	$(CXX) $(CXXFLAGS) $< -o $@ 
+	ln -sf heap-expo-clang heap-expo-clang++
 
 LLVMHeapExpo.so: heap-expo-pass.cpp
 	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
@@ -33,6 +37,7 @@ malloc-rt.o: malloc-rt.o.cpp
 
 test_build: $(PROGS)
 	$(CC) $(PASS_CFL) $(CFLAGS) $(INST_LFL) ./test-instr.c -o test-instr
+	$(CXX) $(PASS_CFL) $(CXXFLAGS) $(INST_LFL) ./test-instr-cxx.cpp -o test-instr-cxx
 
 clean:
 	rm -f $(PROGS) ./test-instr
