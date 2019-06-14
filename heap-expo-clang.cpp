@@ -4,6 +4,15 @@
 #include <unistd.h>
 
 int main(int argc, char** argv) {
+    int _argc;
+    char *path, *alt_cc, *alt_cxx;
+    char **_argv;
+    char **cc_params;
+    std::string argv0(argv[0]);
+    std::string obj_path;
+    std::vector<std::string> params;
+    bool maybe_linking = true;
+
     if (argc < 2) {
         std::cerr << "\n"
             "This is a helper application for heap exposure. It serves as a drop-in\n"
@@ -12,62 +21,66 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::vector<std::string> params;
-    char *path = getenv("HEAP_EXPO_PATH");
+    path = getenv("HEAP_EXPO_PATH");
 
-    std::string argv0(argv[0]);
-    std::string obj_path;
-    bool maybe_linking = true;
-
-    if (path) {
+    if (path) 
         obj_path = std::string(path);
-    }
-    else {
-        obj_path = argv0.substr(0,
-                argv0.find_last_of('/'));
-    }
+    else 
+        obj_path = argv0.substr(0, argv0.find_last_of('/'));
 
-    std::cout << "Object path: " << obj_path << '\n';
 
+    /* Add llvm pass argument */
     params.push_back("-Xclang");
     params.push_back("-load");
     params.push_back("-Xclang");
     params.push_back(obj_path + "/LLVMHeapExpo.so");
 
+
     if (argc == 1 && !strcmp(argv[1], "-v")) maybe_linking = false;
-    int argc_ = argc;
-    char** argv_ = argv;
-    while (--argc_) {
-        std::string cur(*(++argv_));
+
+    /* Check is linker is involved */
+    _argc = argc;
+    _argv = argv;
+    while (--_argc) {
+        std::string cur(*(++_argv));
         
         if (cur == "-c" || cur == "-S" || cur == "-E")
             maybe_linking = false;
 
     }
-    /* force c++ because rt uses STL lib */
-    params.push_back("-lstdc++"); 
+
+    /* 
+     * Add rt objects if involving linking 
+     * This has to go before the src file so that LLVM Pass can see rt functions
+     */
     if (maybe_linking) {
         params.push_back("-flto");
         params.push_back(obj_path + "/heap-expo-rt.o");
         params.push_back(obj_path + "/malloc-rt.o");
+        /* force c++ because rt will use STL lib */
+        params.push_back("-lstdc++"); 
     }
-    while (--argc) {
-        std::string cur(*(++argv)); 
+
+    /* Sanitize and add input arguments */
+    _argc = argc;
+    _argv = argv;
+    while (--_argc) {
+        std::string cur(*(++_argv)); 
         /* Sanitize optimization level for lto */
         if (maybe_linking && (cur == "-Os"|| cur == "-Oz"))
             params.push_back("-O2");
         else 
             params.push_back(cur);
     }
-    std::cout << "Maybe Linking? " << maybe_linking << '\n';
 
-    char** cc_params = new char*[params.size() + 2];
+    cc_params = new char*[params.size() + 2];
 
+    /* Choose a clang compiler */
     if (argv0.find("heap-expo-clang++") != std::string::npos) {
-        char* alt_cxx = getenv("HEAP_EXPO_CXX");
+        alt_cxx = getenv("HEAP_EXPO_CXX");
         cc_params[0] = alt_cxx ? alt_cxx : (char*)"clang++-7";
     } else {
-        char* alt_cc = getenv("HEAP_EXPO_CC");
+        alt_cc = getenv("HEAP_EXPO_CC");
         cc_params[0] = alt_cc ? alt_cc : (char*)"clang-7";
     }
 
@@ -77,12 +90,14 @@ int main(int argc, char** argv) {
 
     cc_params[params.size()+1] = NULL;
 
+    /*
     char** tmp = cc_params;
     while(tmp != NULL && *tmp != NULL) {
         printf("%s ", *tmp);
         tmp++;
     }
     printf("\n");
+    */
 
     execvp(cc_params[0], cc_params);
 
