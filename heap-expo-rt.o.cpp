@@ -8,7 +8,18 @@
 
 #include "rt-include.h"
 
-#define PRINTF __printf
+
+/*
+ * LVL0: Production
+ * LVL1: Debug version, need to set env HEAP_EXPO_DEBUG
+ * LVL2: Debug version
+ */
+#define DEBUG_LVL 1
+#if DEBUG_LVL >= 1
+#define PRINTF(...) __printf(__VA_ARGS__)
+#else
+#define PRINTF(...) 
+#endif
 
 using namespace std;
 
@@ -19,8 +30,19 @@ he_unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the o
 
 bool he_initialized = false;
 
+#if DEBUG_LVL == 1
+int debug_mode = 0; 
+#endif
 
+#if DEBUG_LVL >= 1
 void __printf(const char * format, ...) {
+#if DEBUG_LVL == 1
+    if (!debug_mode) 
+        debug_mode = getenv("HEAP_EXPO_DEBUG") ? 1 : 2;
+
+    if (debug_mode == 2) return;
+#endif
+
     int n;
     char str[256] = {0};
     va_list args;
@@ -30,6 +52,7 @@ void __printf(const char * format, ...) {
     if (!(n = write(1, str, n))) 
         abort();
 }
+#endif
 
 
 void print_memory_objects() {
@@ -65,7 +88,7 @@ void __attribute__((constructor (-1))) init_rt(void) {
     new(&in_edges) he_map<uintptr_t, he_set<uintptr_t>>;
     new(&out_edges) he_map<uintptr_t, he_set<uintptr_t>>;
     new(&ptr_record) he_unordered_map<uintptr_t, uintptr_t>;
-    printf("STL objects initialized\n");
+    PRINTF("STL objects initialized\n");
     he_initialized = true;
 }
 

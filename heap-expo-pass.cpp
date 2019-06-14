@@ -10,10 +10,20 @@
 
 #include "llvm-include.h"
 
+#include <exception>
+#include <cxxabi.h>
+
 #include <vector>
 
-using namespace llvm;
+#define LVL_ERROR   1
+#define LVL_WARNING 2
+#define LVL_INFO    3
+#define LVL_DEBUG   4
+#define DEBUG_LVL LVL_INFO
+#define LOG(LVL) ((DEBUG_LVL >= LVL) ? llvm::errs() : llvm::nulls())
 
+
+using namespace llvm;
 
 namespace {
 
@@ -42,6 +52,20 @@ static Constant* getCtorStruct(Module *M, Function *F) {
     SList.push_back(ConstantPointerNull::get(Int8PtrTy(M)));
     return ConstantStruct::get(getCtorElemTy(M), SList);
 
+}
+
+static std::string demangleName(std::string input) {
+    int status;
+    char *real_name;
+
+    real_name = abi::__cxa_demangle(input.c_str(), 0, 0, &status);
+    if (real_name) {
+        std::string res(real_name);
+        free(real_name);
+        return "c++:" + res ;
+    } else {
+        return input;
+    }
 }
 
 static void addToGlobalCtors(Module *M, Function* F) {
@@ -150,7 +174,7 @@ struct HeapExpoGlobalTracker : public ModulePass {
         M = &Mod;
         DL = &(M->getDataLayout());
         if (!DL)
-            errs() << "Data Layout required\n";
+            LOG(LVL_ERROR) << "Data Layout required\n";
 
         GlobalHookFunc = (Function*)M->getOrInsertFunction("global_hook", VoidTy(M), Int8PtrTy(M), SizeTy(M));
         initialized = true;
@@ -183,20 +207,20 @@ struct HeapExpo : public FunctionPass {
 //        if (F.getName() == "regptr") return false;
 //        if (F.getName() == "deregptr") return false;
         M = F.getParent();
-        errs() << "HeapExpo: ";
-        errs().write_escaped(F.getName()) << '\n';
+        LOG(LVL_INFO) << "HeapExpo: ";
+        LOG(LVL_INFO).write_escaped(demangleName(F.getName())) << '\n';
         if (!initialized) 
             initialize();
         for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
             Instruction *I = &*i;
             if (isa<StoreInst> (I)) {
-                errs() << "Store instruction: " << *I << "\n";
+                LOG(LVL_DEBUG) << "Store instruction: " << *I << "\n";
                 StoreInst *SI = dyn_cast<StoreInst> (I);
                 if (SI->getValueOperand()->getType()->isPointerTy()) {
                     if (isa<GlobalVariable>(SI->getPointerOperand()))
-                        errs() << "Storing to global var\n" ;
+                        LOG(LVL_DEBUG) << "Storing to global var\n" ;
                     if (isa<ConstantPointerNull>(SI->getValueOperand())) {
-                        errs() << "Value is a nullptr\n";
+                        LOG(LVL_DEBUG) << "Value is a nullptr\n";
 
                         DebugLoc DLoc = I->getDebugLoc();
                         if (!DLoc)
@@ -213,7 +237,7 @@ struct HeapExpo : public FunctionPass {
                         deregptr_call->setDebugLoc(DLoc);
 
                     } else {
-                        errs() << "Value is a ptr\n";
+                        LOG(LVL_DEBUG) << "Value is a ptr\n";
 
                         DebugLoc DLoc = I->getDebugLoc();
                         if (!DLoc)

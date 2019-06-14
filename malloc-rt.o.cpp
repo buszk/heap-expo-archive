@@ -1,4 +1,3 @@
-#include <cstdio>
 #include <unistd.h>
 #include "rt-include.h"
 
