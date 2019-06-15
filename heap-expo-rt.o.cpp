@@ -23,6 +23,7 @@
 
 using namespace std;
 
+/* XXX: object type */
 he_map<uintptr_t, size_t> memory_objects;
 he_map<uintptr_t, he_set<uintptr_t>> in_edges; // map an object to those who points to it
 he_map<uintptr_t, he_set<uintptr_t>> out_edges; // map an object to the objects it points to
@@ -105,7 +106,7 @@ void __attribute__((destructor(1000000))) fini_rt(void)
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
     memory_objects[ptr] = size;
 }
-
+/* XXX: unwind stack */
 EXT_C void alloc_hook(char* ptr_, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
@@ -120,6 +121,7 @@ inline void dealloc_hook_(uintptr_t ptr) {
     }
 }
 
+/* XXX: unwind stack */
 EXT_C void dealloc_hook(char* ptr_) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
@@ -127,6 +129,7 @@ EXT_C void dealloc_hook(char* ptr_) {
     dealloc_hook_(ptr);
 }
 
+/* XXX: unwind stack */
 EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     if (!he_initialized) return;
     uintptr_t oldptr = (uintptr_t)oldptr_;
