@@ -63,3 +63,39 @@ using he_map = std::map<Key, T, std::less<Key>, he_allocator<std::pair<const Key
 template <typename Key, typename T>
 using he_unordered_map = std::unordered_map<Key, T, std::hash<Key>, std::equal_to<Key>, he_allocator<std::pair<const Key, T>>>;
 
+enum memory_type_e { UNKNOWN, GLOBAL, HEAP, STACK };
+
+static const char* memory_type_strings[] = { "Unknow", "Global", "Heap", "Stack" };
+
+static const char* getTypeString(int typeVal) {
+    return memory_type_strings[typeVal];
+}
+
+struct object_info_t {
+    size_t            size      ;
+    memory_type_e     type      ;
+    he_set<uintptr_t> in_edges  ;
+    he_set<uintptr_t> out_edges ;
+    
+    object_info_t () {
+        size = 0;
+        type = UNKNOWN;
+    }
+
+    object_info_t (size_t s) {
+        size = s;
+        type = UNKNOWN;
+    }
+
+    object_info_t (size_t s, memory_type_e t) {
+        size = s;
+        type = t;
+    }
+
+};
+
+struct pointer_info_t {
+    uintptr_t   value   ;
+    uintptr_t   src_obj ;
+    uintptr_t   dst_obj ;
+};

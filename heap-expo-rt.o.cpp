@@ -24,9 +24,7 @@
 using namespace std;
 
 /* XXX: object type */
-he_map<uintptr_t, size_t> memory_objects;
-he_map<uintptr_t, he_set<uintptr_t>> in_edges; // map an object to those who points to it
-he_map<uintptr_t, he_set<uintptr_t>> out_edges; // map an object to the objects it points to
+he_map<uintptr_t, struct object_info_t> memory_objects;
 he_unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the object addr 
 
 bool he_initialized = false;
@@ -59,14 +57,14 @@ void __printf(const char * format, ...) {
 void print_memory_objects() {
     PRINTF("Objects List:\n");
     for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
-        PRINTF("Heap Object: %016lx:%016lx\n", it->first, it->second);
+        PRINTF("%s Object: %016lx:%016lx\n", getTypeString(it->second.type), it->first, it->second.size);
     }
 }
 
 void print_edges() {
     PRINTF("Edges List:\n");
-    for (auto it = out_edges.begin(); it != out_edges.end(); it++) {
-        for (uintptr_t obj: out_edges[it->first]) {
+    for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
+        for (uintptr_t obj: it->second.out_edges) {
             PRINTF("Heap Edge: %016lx->%016lx\n", it->first, obj);
         }
     }
@@ -81,13 +79,11 @@ EXT_C void global_hook(char* addr, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)addr;
     PRINTF("[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
-    memory_objects[ptr] = size;
+    memory_objects[ptr] = object_info_t(size, GLOBAL);
 }
 
 void __attribute__((constructor (-1))) init_rt(void) {
-    new(&memory_objects) he_map<uintptr_t, size_t>;
-    new(&in_edges) he_map<uintptr_t, he_set<uintptr_t>>;
-    new(&out_edges) he_map<uintptr_t, he_set<uintptr_t>>;
+    new(&memory_objects) he_map<uintptr_t, struct object_info_t>;
     new(&ptr_record) he_unordered_map<uintptr_t, uintptr_t>;
     PRINTF("STL objects initialized\n");
     he_initialized = true;
@@ -104,7 +100,7 @@ void __attribute__((destructor(1000000))) fini_rt(void)
 */
 
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
-    memory_objects[ptr] = size;
+    memory_objects[ptr] = object_info_t(size, HEAP);
 }
 /* XXX: unwind stack */
 EXT_C void alloc_hook(char* ptr_, size_t size) {
@@ -136,30 +132,30 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     uintptr_t newptr = (uintptr_t)newptr_;
     PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     if (oldptr == newptr) {
-        memory_objects[newptr] = newsize;
+        memory_objects[newptr] = { newsize };
         return;
     }
-    size_t oldsize = memory_objects[oldptr];
+    size_t oldsize = memory_objects[oldptr].size;
     alloc_hook_(newptr, newsize);
 
-    out_edges[newptr] = out_edges[oldptr];
-    if (!out_edges.erase(oldptr)) abort();
+    memory_objects[newptr].out_edges.insert(make_move_iterator(memory_objects[oldptr].out_edges.begin()),
+                                            make_move_iterator(memory_objects[oldptr].out_edges.end()));
 
     /* Iterate every objects old object points to */
-    for (uintptr_t obj_addr: out_edges[newptr]) {
+    for (uintptr_t obj_addr: memory_objects[newptr].out_edges) {
 
-        auto it = in_edges[obj_addr].upper_bound(oldptr);
+        auto it = memory_objects[obj_addr].in_edges.upper_bound(oldptr);
 
-        if (it == in_edges[obj_addr].begin()) {
+        if (it == memory_objects[obj_addr].in_edges.begin()) {
             continue;
         }
         it--;
 
         while(*it >= oldptr && *it < oldptr+ oldsize)  {
             /* insert new loc with offset */
-            in_edges[obj_addr].insert(*it-oldptr+newptr); 
+            memory_objects[obj_addr].in_edges.insert(*it-oldptr+newptr); 
             /* erase loc in old addr */
-            in_edges[obj_addr].erase(it++);
+            memory_objects[obj_addr].in_edges.erase(it++);
 
         }
     }
@@ -178,7 +174,7 @@ uintptr_t get_object_addr(uintptr_t addr) {
     }
     it--;
     int diff = addr - it->first;
-    if (diff >= 0 && diff < it->second) {
+    if (diff >= 0 && diff < it->second.size) {
         return addr;
     }
     return 0;
@@ -187,7 +183,7 @@ uintptr_t get_object_addr(uintptr_t addr) {
 inline void deregptr_(uintptr_t ptr_loc) {
     auto it = ptr_record.find(ptr_loc);
     if (it != ptr_record.end()) {
-        if(!in_edges[it->second].erase(ptr_loc)) abort();
+        if(!memory_objects[it->second].in_edges.erase(ptr_loc)) abort();
         ptr_record.erase(it);
     }
 }
@@ -206,8 +202,8 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     deregptr_(ptr_loc);
 
     if (obj_addr && ptr_obj_addr) {
-        in_edges[obj_addr].insert(ptr_loc);
-        out_edges[ptr_obj_addr].insert(obj_addr);
+        memory_objects[obj_addr].in_edges.insert(ptr_loc);
+        memory_objects[ptr_obj_addr].out_edges.insert(obj_addr);
         ptr_record[ptr_loc] = obj_addr;
     }
 }
