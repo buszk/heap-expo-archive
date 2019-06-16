@@ -113,11 +113,30 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
 }
 
 inline void dealloc_hook_(uintptr_t ptr) {
-    auto it = memory_objects.find(ptr);
-    if (it == memory_objects.end()) 
+    auto moit = memory_objects.find(ptr);
+    if (moit == memory_objects.end()) 
         return;
     
-    memory_objects.erase(it);
+
+    /* Invalidate in-edge ptrs */
+    for (uintptr_t ptr_loc: moit->second.in_edges) {
+        auto it = ptr_record.find(ptr_loc);
+        assert(it != ptr_record.end());
+
+        /* Value did not change, set it to kernel space */
+        if (*(uintptr_t*)ptr_loc == it->second.value) {
+            *(uintptr_t*)ptr_loc |= 0xffff800000000000; 
+        }
+    }
+
+    /* Invalidate out-edge ptrs */
+    for (uintptr_t ptr_loc: moit->second.out_edges) {
+        auto it = ptr_record.find(ptr_loc);
+        assert(it != ptr_record.end());
+        ptr_record.erase(it);
+    }
+
+    memory_objects.erase(moit);
 }
 
 /* XXX: unwind stack */
@@ -168,10 +187,8 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
         ptr_record.erase(it);
 
     }
+    memory_objects[oldptr].out_edges.clear();
 
-
-
-    
     dealloc_hook_(oldptr);
 }
 
