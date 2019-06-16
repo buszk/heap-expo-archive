@@ -3,6 +3,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <assert.h>
 #include <unistd.h>
 #include <stdarg.h>
 
@@ -64,8 +65,9 @@ void print_memory_objects() {
 void print_edges() {
     PRINTF("Edges List:\n");
     for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
-        for (uintptr_t obj: it->second.out_edges) {
-            PRINTF("Heap Edge: %016lx->%016lx\n", it->first, obj);
+        for (uintptr_t ptr_loc: it->second.out_edges) {
+            assert(ptr_record.find(ptr_loc) != ptr_record.end() && "ptr_record does not have this ptr");
+            PRINTF("Heap Edge: %016lx->%016lx\n", it->first, ptr_record[ptr_loc].dst_obj);
         }
     }
 }
@@ -131,36 +133,45 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     if (!he_initialized) return;
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
+    int offset = newptr - oldptr;
     PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
-    if (oldptr == newptr) {
-        memory_objects[newptr] = { newsize };
+    if (offset == 0) {
+        memory_objects[newptr].size = newsize;
         return;
     }
     size_t oldsize = memory_objects[oldptr].size;
     alloc_hook_(newptr, newsize);
 
-    memory_objects[newptr].out_edges.insert(make_move_iterator(memory_objects[oldptr].out_edges.begin()),
-                                            make_move_iterator(memory_objects[oldptr].out_edges.end()));
-
     /* Iterate every objects old object points to */
-    for (uintptr_t obj_addr: memory_objects[newptr].out_edges) {
+    for (uintptr_t ptr_loc: memory_objects[oldptr].out_edges) {
 
-        auto it = memory_objects[obj_addr].in_edges.upper_bound(oldptr);
+        /* Update outedges */
+        memory_objects[newptr].out_edges.insert(ptr_loc+offset);
 
-        if (it == memory_objects[obj_addr].in_edges.begin()) {
+        /* Update inedges */
+        auto it = ptr_record.find(ptr_loc);
+        if (it == ptr_record.end()) 
             continue;
-        }
-        it--;
+        auto moit = memory_objects.find(it->second.dst_obj);
+        if (moit== memory_objects.end())
+            continue;
+        if (moit->second.in_edges.count(ptr_loc))
+            moit->second.in_edges.erase(ptr_loc);
+        else 
+            assert(false && "in edge problem");
+        moit->second.in_edges.insert(ptr_loc+offset);
 
-        while(*it >= oldptr && *it < oldptr+ oldsize)  {
-            /* insert new loc with offset */
-            memory_objects[obj_addr].in_edges.insert(*it-oldptr+newptr); 
-            /* erase loc in old addr */
-            memory_objects[obj_addr].in_edges.erase(it++);
+        /* Update ptr_record */
+        assert(it != ptr_record.end());
+        swap(ptr_record[ptr_loc+offset], it->second);
+        //PRINTF("[HeapExpo][test]: new_ptr_addr:%016lx obj:%016lx\n", ptr_loc+offset, ptr_record[ptr_loc+offset].dst_obj);
+        ptr_record.erase(it);
 
-        }
     }
 
+
+
+    
     dealloc_hook_(oldptr);
 }
 
@@ -176,7 +187,7 @@ uintptr_t get_object_addr(uintptr_t addr) {
     it--;
     int diff = addr - it->first;
     if (diff >= 0 && diff < it->second.size) {
-        return addr;
+        return it->first;
     }
     return 0;
 }
@@ -185,7 +196,11 @@ inline void deregptr_(uintptr_t ptr_loc) {
     auto it = ptr_record.find(ptr_loc);
     if (it == ptr_record.end())
         return;
-    if(!memory_objects[it->second.dst_obj].in_edges.erase(ptr_loc)) abort();
+    auto moit = memory_objects.find(it->second.dst_obj);
+    if ( moit != memory_objects.end()) {
+        if (! moit->second.in_edges.erase(ptr_loc)) 
+            assert (false && "deregptr in edge problem");
+    }
     ptr_record.erase(it);
 }
 
@@ -204,7 +219,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
 
     if (obj_addr && ptr_obj_addr) {
         memory_objects[obj_addr].in_edges.insert(ptr_loc);
-        memory_objects[ptr_obj_addr].out_edges.insert(obj_addr);
+        memory_objects[ptr_obj_addr].out_edges.insert(ptr_loc);
         ptr_record[ptr_loc] = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr);
     }
 }
