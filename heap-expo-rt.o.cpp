@@ -25,7 +25,7 @@ using namespace std;
 
 /* XXX: object type */
 he_map<uintptr_t, struct object_info_t> memory_objects;
-he_unordered_map<uintptr_t, uintptr_t> ptr_record; // Log all all ptrs and the object addr 
+he_unordered_map<uintptr_t, struct pointer_info_t> ptr_record; // Log all all ptrs and the object addr 
 
 bool he_initialized = false;
 
@@ -84,7 +84,7 @@ EXT_C void global_hook(char* addr, size_t size) {
 
 void __attribute__((constructor (-1))) init_rt(void) {
     new(&memory_objects) he_map<uintptr_t, struct object_info_t>;
-    new(&ptr_record) he_unordered_map<uintptr_t, uintptr_t>;
+    new(&ptr_record) he_unordered_map<uintptr_t, struct pointer_info_t>;
     PRINTF("STL objects initialized\n");
     he_initialized = true;
 }
@@ -112,9 +112,10 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
 
 inline void dealloc_hook_(uintptr_t ptr) {
     auto it = memory_objects.find(ptr);
-    if (it != memory_objects.end()) {
-        memory_objects.erase(it);
-    }
+    if (it == memory_objects.end()) 
+        return;
+    
+    memory_objects.erase(it);
 }
 
 /* XXX: unwind stack */
@@ -182,10 +183,10 @@ uintptr_t get_object_addr(uintptr_t addr) {
 
 inline void deregptr_(uintptr_t ptr_loc) {
     auto it = ptr_record.find(ptr_loc);
-    if (it != ptr_record.end()) {
-        if(!memory_objects[it->second].in_edges.erase(ptr_loc)) abort();
-        ptr_record.erase(it);
-    }
+    if (it == ptr_record.end())
+        return;
+    if(!memory_objects[it->second.dst_obj].in_edges.erase(ptr_loc)) abort();
+    ptr_record.erase(it);
 }
 
 EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
@@ -204,7 +205,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     if (obj_addr && ptr_obj_addr) {
         memory_objects[obj_addr].in_edges.insert(ptr_loc);
         memory_objects[ptr_obj_addr].out_edges.insert(obj_addr);
-        ptr_record[ptr_loc] = obj_addr;
+        ptr_record[ptr_loc] = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr);
     }
 }
 
