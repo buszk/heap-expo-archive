@@ -149,11 +149,18 @@ struct HeapExpoGlobalTracker : public ModulePass {
 
         for (auto &global: M->globals()) {
             GlobalValue *G = &global;
+            if (!isa<GlobalVariable>(G)) 
+                continue;
+            GlobalVariable *GV = (GlobalVariable*) G;
 
             if (G->getName() == "llvm.global_ctors" ||
                 G->getName() == "llvm.global_dtors" ||
                 G->getName() == "llvm.global.annotations" ||
                 G->getName() == "llvm.used") 
+                continue;
+    
+            /* Ignore constant global variables */
+            if (GV->isConstant())
                 continue;
 
             size_t elementSize = DL->getTypeAllocSize(G->getType()->getPointerElementType());
