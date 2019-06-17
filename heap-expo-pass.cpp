@@ -19,7 +19,7 @@
 #define LVL_WARNING 2
 #define LVL_INFO    3
 #define LVL_DEBUG   4
-#define DEBUG_LVL LVL_INFO
+#define DEBUG_LVL LVL_ERROR
 #define LOG(LVL) ((DEBUG_LVL >= LVL) ? llvm::errs() : llvm::nulls())
 
 

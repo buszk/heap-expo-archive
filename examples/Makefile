@@ -7,3 +7,6 @@ all: $(TEST_PROGS)
 
 %:%.c
 	$(HECC) -g $< -o $@
+
+clean:
+	rm -f $(TEST_PROGS)

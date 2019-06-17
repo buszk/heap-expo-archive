@@ -98,19 +98,21 @@ struct pointer_info_t {
     uintptr_t   value   ;
     uintptr_t   src_obj ;
     uintptr_t   dst_obj ;
+    bool        invalid ;
 
     pointer_info_t () {
-        value = src_obj = dst_obj = 0;
+        value = src_obj = dst_obj = invalid = 0;
     }
 
     pointer_info_t (uintptr_t v) {
         value = v;
-        src_obj = dst_obj = 0;
+        src_obj = dst_obj = invalid = 0;
     }
 
     pointer_info_t (uintptr_t v, uintptr_t s, uintptr_t d) {
         value = v;
         src_obj = s;
         dst_obj = d;
+        invalid = 0;
     }
 };

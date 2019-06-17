@@ -24,7 +24,6 @@
 
 using namespace std;
 
-/* XXX: object type */
 he_map<uintptr_t, struct object_info_t> memory_objects;
 he_unordered_map<uintptr_t, struct pointer_info_t> ptr_record; // Log all all ptrs and the object addr 
 
@@ -49,11 +48,10 @@ void __printf(const char * format, ...) {
     va_start(args, format);
     n = vsnprintf(str, 256, format, args);
     va_end(args);
-    if (!(n = write(1, str, n))) 
+    if (!(n = write(2, str, n))) 
         abort();
 }
 #endif
-
 
 void print_memory_objects() {
     PRINTF("Objects List:\n");
@@ -91,28 +89,22 @@ void __attribute__((constructor (-1))) init_rt(void) {
     he_initialized = true;
 }
 
-/* 
- * XXX: Destructor not working because of freeing of heap memory 
- */
-/*
-void __attribute__((destructor(1000000))) fini_rt(void) 
-    print_memory_objects();
-    print_edges();
-}
-*/
-
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
     memory_objects[ptr] = object_info_t(size, HEAP);
 }
+
 /* XXX: unwind stack */
 EXT_C void alloc_hook(char* ptr_, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
-    alloc_hook_(ptr, size);
+    if (ptr && size)
+        alloc_hook_(ptr, size);
 }
 
 inline void dealloc_hook_(uintptr_t ptr) {
+    if (ptr == 0)
+        return;
     auto moit = memory_objects.find(ptr);
     if (moit == memory_objects.end()) 
         return;
@@ -121,18 +113,44 @@ inline void dealloc_hook_(uintptr_t ptr) {
     /* Invalidate in-edge ptrs */
     for (uintptr_t ptr_loc: moit->second.in_edges) {
         auto it = ptr_record.find(ptr_loc);
-        assert(it != ptr_record.end());
-
-        /* Value did not change, set it to kernel space */
-        if (*(uintptr_t*)ptr_loc == it->second.value) {
-            *(uintptr_t*)ptr_loc |= 0xffff800000000000; 
+        if (it == ptr_record.end()) {
+            PRINTF("Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
+            assert(false && "cannot find ptr in ptr_record");
         }
+
+        assert(ptr == it->second.dst_obj);
+        uintptr_t cur_val = *(uintptr_t*)ptr_loc;
+        /* Value did not change, set it to kernel space */
+        if (cur_val != it->second.value) {
+            auto smoit = memory_objects.find(it->second.src_obj);
+            assert(smoit != memory_objects.end());
+            if (cur_val < smoit->first || cur_val >= smoit->first + smoit->second.size) {
+                PRINTF("PTR[%016lx] has unknown behavior\n", ptr_loc);
+                PRINTF("Record: value: %016lx src_obj:%016lx dst_obj:%016lx\n",
+                        it->second.value, it->second.src_obj, it->second.dst_obj);
+                PRINTF("Current value: %016lx\n", cur_val);
+                if (!smoit->second.out_edges.erase(ptr_loc)) 
+                    assert(false &&"smoit incongruence");
+                ptr_record.erase(it);
+                continue;
+            }
+        }
+        *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
+        PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
+        it->second.invalid = true;
     }
 
     /* Invalidate out-edge ptrs */
     for (uintptr_t ptr_loc: moit->second.out_edges) {
         auto it = ptr_record.find(ptr_loc);
         assert(it != ptr_record.end());
+        if (!it->second.invalid) {
+            auto dmoit = memory_objects.find(it->second.dst_obj);
+            assert(dmoit != memory_objects.end());
+            if (!dmoit->second.in_edges.erase(ptr_loc)) {
+                assert(false && "Cannot remove ptr_loc");
+            }
+        }
         ptr_record.erase(it);
     }
 
@@ -144,7 +162,8 @@ EXT_C void dealloc_hook(char* ptr_) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
-    dealloc_hook_(ptr);
+    if (ptr)
+        dealloc_hook_(ptr);
 }
 
 /* XXX: unwind stack */
@@ -158,38 +177,45 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
         memory_objects[newptr].size = newsize;
         return;
     }
-    size_t oldsize = memory_objects[oldptr].size;
-    alloc_hook_(newptr, newsize);
+    
+    if (newptr && newsize)
+        alloc_hook_(newptr, newsize);
 
-    /* Iterate every objects old object points to */
-    for (uintptr_t ptr_loc: memory_objects[oldptr].out_edges) {
+    //size_t oldsize = memory_objects[oldptr].size;
 
-        /* Update outedges */
-        memory_objects[newptr].out_edges.insert(ptr_loc+offset);
+    if (newptr && newsize && oldptr) {
+        /* Iterate every objects old object points to */
+        for (uintptr_t ptr_loc: memory_objects[oldptr].out_edges) {
 
-        /* Update inedges */
-        auto it = ptr_record.find(ptr_loc);
-        if (it == ptr_record.end()) 
-            continue;
-        auto moit = memory_objects.find(it->second.dst_obj);
-        if (moit== memory_objects.end())
-            continue;
-        if (moit->second.in_edges.count(ptr_loc))
-            moit->second.in_edges.erase(ptr_loc);
-        else 
-            assert(false && "in edge problem");
-        moit->second.in_edges.insert(ptr_loc+offset);
+            /* Update outedges */
+            memory_objects[newptr].out_edges.insert(ptr_loc+offset);
 
-        /* Update ptr_record */
-        assert(it != ptr_record.end());
-        swap(ptr_record[ptr_loc+offset], it->second);
-        //PRINTF("[HeapExpo][test]: new_ptr_addr:%016lx obj:%016lx\n", ptr_loc+offset, ptr_record[ptr_loc+offset].dst_obj);
-        ptr_record.erase(it);
+            /* Update inedges */
+            auto it = ptr_record.find(ptr_loc);
+            if (it == ptr_record.end()) 
+                continue;
+            auto moit = memory_objects.find(it->second.dst_obj);
+            if (moit== memory_objects.end())
+                continue;
+            if (moit->second.in_edges.count(ptr_loc))
+                moit->second.in_edges.erase(ptr_loc);
+            else  {
+                assert(false && "in edge problem");
+            }
+            PRINTF("MOVING PTR[%016lx] to %016lx, OFFSET:%016lx\n", ptr_loc, ptr_loc+offset, offset);
+            moit->second.in_edges.insert(ptr_loc+offset);
 
+            /* Update ptr_record */
+            assert(it != ptr_record.end());
+            swap(ptr_record[ptr_loc+offset], it->second);
+            ptr_record[ptr_loc+offset].src_obj += offset;
+            ptr_record.erase(it);
+
+        }
+        memory_objects[oldptr].out_edges.clear();
     }
-    memory_objects[oldptr].out_edges.clear();
-
-    dealloc_hook_(oldptr);
+    if (oldptr)
+        dealloc_hook_(oldptr);
 }
 
 /*
@@ -213,10 +239,21 @@ inline void deregptr_(uintptr_t ptr_loc) {
     auto it = ptr_record.find(ptr_loc);
     if (it == ptr_record.end())
         return;
+
     auto moit = memory_objects.find(it->second.dst_obj);
-    if ( moit != memory_objects.end()) {
-        if (! moit->second.in_edges.erase(ptr_loc)) 
+    if (!it->second.invalid) {
+        assert(moit != memory_objects.end() && "dst_obj in_edges not cleared");
+        if (! moit->second.in_edges.erase(ptr_loc)) {
+            PRINTF("dst_obj: loc:%016lx\n", it->second.dst_obj);
             assert (false && "deregptr in edge problem");
+        }
+    }
+
+    moit = memory_objects.find(it->second.src_obj);
+    assert( moit != memory_objects.end() && "src_obj out_edges not cleared");
+    if (! moit->second.out_edges.erase(ptr_loc)) {
+        PRINTF("src_obj: loc:%016lx\n", it->second.src_obj);
+        assert (false && "deregptr out edge problem");
     }
     ptr_record.erase(it);
 }
@@ -229,8 +266,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
 
     uintptr_t obj_addr = get_object_addr(ptr_val);
     uintptr_t ptr_obj_addr = get_object_addr(ptr_loc);
-    if (obj_addr) PRINTF("This is a recorded object ptr\n");
-    if (ptr_obj_addr) PRINTF("This ptr is in a recoreded object\n");
+    PRINTF("[HeapExpo][regptr]: %016lx -> %016lx\n", ptr_obj_addr, obj_addr);
     
     deregptr_(ptr_loc);
 
