@@ -90,6 +90,7 @@ void __attribute__((constructor (-1))) init_rt(void) {
 }
 
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
+    /* Add heap object to memory_objects. Simple */
     memory_objects[ptr] = object_info_t(size, HEAP);
 }
 
@@ -110,7 +111,7 @@ inline void dealloc_hook_(uintptr_t ptr) {
         return;
     
 
-    /* Invalidate in-edge ptrs */
+    /* Invalidate ptrs that point to this heap object */
     for (uintptr_t ptr_loc: moit->second.in_edges) {
         auto it = ptr_record.find(ptr_loc);
         if (it == ptr_record.end()) {
@@ -140,7 +141,7 @@ inline void dealloc_hook_(uintptr_t ptr) {
         it->second.invalid = true;
     }
 
-    /* Invalidate out-edge ptrs */
+    /* Erase ptrs in this heap object */
     for (uintptr_t ptr_loc: moit->second.out_edges) {
         auto it = ptr_record.find(ptr_loc);
         assert(it != ptr_record.end());
@@ -168,6 +169,12 @@ EXT_C void dealloc_hook(char* ptr_) {
 
 /* XXX: unwind stack */
 EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
+    /*
+     * Three cases: oldptr is NULL, newptr is NULL, no input is NULL
+     * Case 1: work as alloc
+     * Case 2: work as dealloc (sometimes this is the case)
+     * Case 3: Alloc, Copy ptrs to new home, Dealloc
+     */
     if (!he_initialized) return;
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
@@ -240,6 +247,7 @@ inline void deregptr_(uintptr_t ptr_loc) {
     if (it == ptr_record.end())
         return;
 
+    /* Remove ptr from dst_obj's in_edges if ptr isn't invalidated */
     auto moit = memory_objects.find(it->second.dst_obj);
     if (!it->second.invalid) {
         assert(moit != memory_objects.end() && "dst_obj in_edges not cleared");
@@ -249,12 +257,14 @@ inline void deregptr_(uintptr_t ptr_loc) {
         }
     }
 
+    /* Remove ptr from src_obj's out_edges */
     moit = memory_objects.find(it->second.src_obj);
     assert( moit != memory_objects.end() && "src_obj out_edges not cleared");
     if (! moit->second.out_edges.erase(ptr_loc)) {
         PRINTF("src_obj: loc:%016lx\n", it->second.src_obj);
         assert (false && "deregptr out edge problem");
     }
+    /* Remove ptr from ptr_record */
     ptr_record.erase(it);
 }
 
@@ -268,8 +278,10 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     uintptr_t ptr_obj_addr = get_object_addr(ptr_loc);
     PRINTF("[HeapExpo][regptr]: %016lx -> %016lx\n", ptr_obj_addr, obj_addr);
     
+    /* Overwrite old ptr if exists */
     deregptr_(ptr_loc);
 
+    /* Create an edge if src and dst are both in memory_objects*/
     if (obj_addr && ptr_obj_addr) {
         memory_objects[obj_addr].in_edges.insert(ptr_loc);
         memory_objects[ptr_obj_addr].out_edges.insert(ptr_loc);
