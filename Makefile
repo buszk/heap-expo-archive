@@ -56,4 +56,4 @@ test_build: $(PROGS)
 	./heap-expo-clang++ ./test-instr-cxx.cpp -o test-instr-cxx
 
 clean:
-	rm -f $(PROGS) ./test-instr
+	rm -f $(PROGS) ./test-instr ./test-instr-cxx

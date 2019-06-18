@@ -11,7 +11,8 @@ int main(int argc, char** argv) {
     std::string argv0(argv[0]);
     std::string obj_path;
     std::vector<std::string> params;
-    bool maybe_linking = true;
+    bool maybe_linking = true,
+         x_set         = false;
     int bit_mode = 0;
 
     if (argc < 2) {
@@ -53,7 +54,9 @@ int main(int argc, char** argv) {
 
         if (cur == "-m64")
             bit_mode = 64;
-
+        
+        if (cur == "-x")
+            x_set = true;
     }
 
     /* 
@@ -62,6 +65,12 @@ int main(int argc, char** argv) {
      */
     if (maybe_linking) {
         params.push_back("-flto");
+
+        if (x_set) {
+            params.push_back("-x");
+            params.push_back("none");
+        }
+            
         switch (bit_mode) {
             case 0:
                 params.push_back(obj_path + "/heap-expo-rt.o");
