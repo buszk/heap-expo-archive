@@ -136,7 +136,11 @@ inline void dealloc_hook_(uintptr_t ptr) {
                 continue;
             }
         }
+#if __x86_64__
         *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
+#else
+        *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
+#endif
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
         it->second.invalid = true;
     }
