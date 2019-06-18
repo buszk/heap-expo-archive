@@ -12,6 +12,7 @@ int main(int argc, char** argv) {
     std::string obj_path;
     std::vector<std::string> params;
     bool maybe_linking = true;
+    int bit_mode = 0;
 
     if (argc < 2) {
         std::cerr << "\n"
@@ -47,6 +48,12 @@ int main(int argc, char** argv) {
         if (cur == "-c" || cur == "-S" || cur == "-E")
             maybe_linking = false;
 
+        if (cur == "-m32")
+            bit_mode = 32;
+
+        if (cur == "-m64")
+            bit_mode = 64;
+
     }
 
     /* 
@@ -55,8 +62,33 @@ int main(int argc, char** argv) {
      */
     if (maybe_linking) {
         params.push_back("-flto");
-        params.push_back(obj_path + "/heap-expo-rt.o");
-        params.push_back(obj_path + "/malloc-rt.o");
+        switch (bit_mode) {
+            case 0:
+                params.push_back(obj_path + "/heap-expo-rt.o");
+                params.push_back(obj_path + "/malloc-rt.o");
+                break;
+
+            case 32:
+                params.push_back(obj_path + "/heap-expo-rt-32.o");
+                params.push_back(obj_path + "/malloc-rt-32.o");
+                if (access(params[params.size()-1].c_str(), R_OK) ||
+                    access(params[params.size()-2].c_str(), R_OK))  {
+                    std::cerr << "-m32 is not supported by your compiler\n";
+                    return 1;
+                }
+                break;
+
+            case 64:
+                params.push_back(obj_path + "/heap-expo-rt-64.o");
+                params.push_back(obj_path + "/malloc-rt-64.o");
+                if (access(params[params.size()-1].c_str(), R_OK) ||
+                    access(params[params.size()-2].c_str(), R_OK))  {
+                    std::cerr << "-m64 is not supported by your compiler\n";
+                    return 1;
+                }
+                break;
+
+        }
         /* force c++ because rt will use STL lib */
         params.push_back("-lstdc++"); 
     }
