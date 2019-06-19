@@ -127,10 +127,12 @@ inline void dealloc_hook_(uintptr_t ptr) {
 
         assert(ptr == it->second.dst_obj);
         /* A special case */
+        /*
         if (it->second.src_obj == it->second.dst_obj) {
+            moit->second.out_edges.erase(ptr_loc);
             ptr_record.erase(it);
             continue;
-        }
+        }*/
         uintptr_t cur_val = *(uintptr_t*)ptr_loc;
         /* Value did not change, set it to kernel space */
         if (cur_val != it->second.value) {
@@ -155,10 +157,12 @@ inline void dealloc_hook_(uintptr_t ptr) {
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
         it->second.invalid = true;
     }
+    moit->second.in_edges.clear();
 
     /* Erase ptrs in this heap object */
     for (uintptr_t ptr_loc: moit->second.out_edges) {
         auto it = ptr_record.find(ptr_loc);
+        PRINTF("[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, moit->first);
         assert(it != ptr_record.end());
         if (!it->second.invalid) {
             auto dmoit = memory_objects.find(it->second.dst_obj);
@@ -169,6 +173,7 @@ inline void dealloc_hook_(uintptr_t ptr) {
         }
         ptr_record.erase(it);
     }
+    moit->second.out_edges.clear();
 
     memory_objects.erase(moit);
 }
@@ -297,7 +302,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     deregptr_(ptr_loc);
 
     /* Create an edge if src and dst are both in memory_objects*/
-    if (obj_addr && ptr_obj_addr) {
+    if (obj_addr && ptr_obj_addr && obj_addr != ptr_obj_addr) {
         memory_objects[obj_addr].in_edges.insert(ptr_loc);
         memory_objects[ptr_obj_addr].out_edges.insert(ptr_loc);
         ptr_record[ptr_loc] = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr);
