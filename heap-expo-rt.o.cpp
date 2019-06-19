@@ -262,28 +262,36 @@ bool get_object_addr(uintptr_t addr, uintptr_t &object_addr, struct object_info_
     return 0;
 }
 
-inline void deregptr_(uintptr_t ptr_loc) {
-    auto it = ptr_record.find(ptr_loc);
-    if (it == ptr_record.end())
-        return;
+inline void deregptr_dst(he_unordered_map<uintptr_t, struct pointer_info_t>::iterator it) {
 
     /* Remove ptr from dst_obj's in_edges if ptr isn't invalidated */
     if (!it->second.invalid) {
         assert(it->second.dst_info && "dst_obj in_edges not cleared");
-        if (! it->second.dst_info->in_edges.erase(ptr_loc)) {
+        if (! it->second.dst_info->in_edges.erase(it->first)) {
             PRINTF("dst_obj: loc:%016lx\n", it->second.dst_obj);
             assert (false && "deregptr in edge problem");
         }
-    }
+    } 
+}
+
+inline void deregptr_src(he_unordered_map<uintptr_t, struct pointer_info_t>::iterator it) {
 
     /* Remove ptr from src_obj's out_edges */
     assert( it->second.src_info && "src_obj out_edges not cleared");
-    if (! it->second.src_info->out_edges.erase(ptr_loc)) {
+    if (! it->second.src_info->out_edges.erase(it->first)) {
         PRINTF("src_obj: loc:%016lx\n", it->second.src_obj);
         assert (false && "deregptr out edge problem");
     }
-    /* Remove ptr from ptr_record */
-    ptr_record.erase(it);
+}
+
+inline void deregptr_(uintptr_t ptr_loc) {
+
+    auto it = ptr_record.find(ptr_loc);
+    if (it != ptr_record.end()) {
+         deregptr_dst(it);
+         deregptr_src(it);
+         ptr_record.erase(it);
+    }
 }
 
 EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
@@ -294,24 +302,16 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     struct object_info_t *obj_info, *ptr_obj_info;
     obj_addr = ptr_obj_addr = 0;
     obj_info = ptr_obj_info = NULL;
-    get_object_addr(ptr_val, obj_addr, obj_info);
-    get_object_addr(ptr_loc, ptr_obj_addr, ptr_obj_info);
-    PRINTF("[HeapExpo][regptr][%lx]: loc:%016lx val:%016lx\n[HeapExpo][regptr]: %016lx -> %016lx\n", pthread_self(), ptr_loc, ptr_val, ptr_obj_addr, obj_addr);
     
-    /* Overwrite old ptr if exists */
-    auto it = ptr_record.find(ptr_loc);
-    if (it != ptr_record.end()) {
-        /* We are getting to the same obj */
-        if (it->second.dst_obj == obj_addr && it->second.src_obj == ptr_obj_addr) {
-            ptr_record[ptr_loc].value = ptr_val; 
-            return;
-        }
-        else {
-            deregptr_(ptr_loc);
-        }
-
+    deregptr_(ptr_loc);
+    if (ptr_val < 256) {
+        return;
     }
 
+    get_object_addr(ptr_val, obj_addr, obj_info);
+    get_object_addr(ptr_loc, ptr_obj_addr, ptr_obj_info);
+    PRINTF("[HeapExpo][regptr]: loc:%016lx val:%016lx\n[HeapExpo][regptr]: %016lx -> %016lx\n", ptr_loc, ptr_val, ptr_obj_addr, obj_addr);
+    
     /* Create an edge if src and dst are both in memory_objects*/
     if (obj_addr && ptr_obj_addr && obj_addr != ptr_obj_addr) {
         obj_info->in_edges.insert(ptr_loc);
