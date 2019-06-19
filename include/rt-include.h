@@ -7,12 +7,23 @@
 
 #define EXT_C extern "C"
 
-#define __malloc   __libc_malloc
-#define __free     __libc_free
-#define __calloc   __libc_calloc
-#define __realloc  __libc_realloc
+#define __malloc            __libc_malloc
+#define __free              __libc_free
+#define __calloc            __libc_calloc
+#define __realloc           __libc_realloc
+#define __aligned_alloc     __libc_aligned_alloc
+#define __memalign          __libc_memalign
+#define __pvalloc           __libc_pvalloc
+#define __valloc            __libc_valloc
+
+#define alias(name, aliasname) _alias(name, aliasname)
+
+#define _alias(name, aliasname) \
+    extern __typeof (name) aliasname __attribute__((alias(#name))) \
+        __attribute_copy__(name);
 
 extern "C" {
+    void msg(const char*);
     void alloc_hook(char* addr, size_t size);
     void dealloc_hook(char* addr);
     void realloc_hook(char* old_addr, char* new_addr, size_t new_size);
@@ -21,6 +32,11 @@ extern "C" {
     void __libc_free(void*);
     void *__libc_calloc(size_t, size_t);
     void *__libc_realloc(void*, size_t);
+    void *__libc_memalign(size_t, size_t);
+    void *__libc_aligned_alloc(size_t, size_t);
+    void *__libc_valloc(size_t);
+    void *__libc_pvalloc(size_t);
+    int  __posix_memalign(void**, size_t, size_t);
 }
 
 template <typename T>

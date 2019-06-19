@@ -53,6 +53,12 @@ void __printf(const char * format, ...) {
 }
 #endif
 
+EXT_C void msg(const char* str) {
+#if DEBUG_LVL >=1
+    __printf(str);
+#endif
+}
+
 void print_memory_objects() {
     PRINTF("Objects List:\n");
     for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
