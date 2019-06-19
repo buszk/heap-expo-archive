@@ -137,6 +137,21 @@ static bool isStackPtr(Value *V) {
     return false;
 }
 
+static bool isConstantGlobalPtr(Value *V) {
+    if (!isa<User>(V))
+        return false;
+
+    User *U = (User*)V;
+
+    if (isa<GlobalVariable>(U)) {
+        return true;
+    }
+    else if (isa<BinaryOperator>(U)) {
+        return isConstantGlobalPtr(U->getOperand(0)) || isConstantGlobalPtr(U->getOperand(1));
+    }
+    return false;
+}
+
 struct HeapExpoGlobalTracker : public ModulePass {
     static char ID;
 
@@ -218,6 +233,7 @@ struct HeapExpo : public FunctionPass {
     Module *M;
     size_t store_instr_cnt = 0;
     size_t stack_store_instr_cnt = 0;
+    size_t store_const_global_cnt = 0;
 
     HeapExpo() : FunctionPass(ID) { initialized = false; }
 
@@ -282,6 +298,11 @@ struct HeapExpo : public FunctionPass {
                             continue;
                         }
 
+                        if (isConstantGlobalPtr(SI->getValueOperand())) {
+                            store_const_global_cnt++;
+                            continue;
+                        }
+
                         std::vector <Value*> Args;
                         CastInst *cast_loc =
                             CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
@@ -317,6 +338,8 @@ struct HeapExpo : public FunctionPass {
             " all store instructions\n";
         ss << "Instrumented tracking to " << stack_store_instr_cnt << 
             " stack store instructions\n";
+        ss << "Instrumented tracking to " << store_const_global_cnt << 
+            " store const global instructions\n";
         LOG(LVL_INFO) << ss.str();
         return false;
     }
