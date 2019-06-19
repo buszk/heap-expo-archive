@@ -95,24 +95,31 @@ struct object_info_t {
 };
 
 struct pointer_info_t {
-    uintptr_t   value   ;
-    uintptr_t   src_obj ;
-    uintptr_t   dst_obj ;
-    bool        invalid ;
+    uintptr_t             value    ,
+                          src_obj  ,
+                          dst_obj  ;
+    bool                  invalid  ;
+    struct object_info_t *src_info ,
+                         *dst_info ;
 
     pointer_info_t () {
         value = src_obj = dst_obj = invalid = 0;
+        src_info = dst_info = NULL;
     }
 
     pointer_info_t (uintptr_t v) {
         value = v;
         src_obj = dst_obj = invalid = 0;
+        src_info = dst_info = NULL;
     }
 
-    pointer_info_t (uintptr_t v, uintptr_t s, uintptr_t d) {
+    pointer_info_t (uintptr_t v, uintptr_t s, uintptr_t d,
+            struct object_info_t *si, struct object_info_t *di) {
         value = v;
         src_obj = s;
         dst_obj = d;
+        src_info = si;
+        dst_info = di;
         invalid = 0;
     }
 };
