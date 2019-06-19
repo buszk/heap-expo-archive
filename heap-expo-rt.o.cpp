@@ -120,6 +120,11 @@ inline void dealloc_hook_(uintptr_t ptr) {
         }
 
         assert(ptr == it->second.dst_obj);
+        /* A special case */
+        if (it->second.src_obj == it->second.dst_obj) {
+            ptr_record.erase(it);
+            continue;
+        }
         uintptr_t cur_val = *(uintptr_t*)ptr_loc;
         /* Value did not change, set it to kernel space */
         if (cur_val != it->second.value) {
