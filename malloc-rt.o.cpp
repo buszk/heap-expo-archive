@@ -54,12 +54,12 @@ EXT_C void* pvalloc(size_t size) {
     alloc_hook((char*)res, size);
     return res;
 }
-
+/*
 EXT_C int posix_memalign(void** memptr, size_t alignment, size_t size) {
     void *mem;
     msg("[posix_memalign]");
-    /* Test whether the SIZE argument is valid.  It must be a power of
-       two multiple of sizeof (void *).  */
+    // Test whether the SIZE argument is valid.  It must be a power of
+    // two multiple of sizeof (void *).  
     if (alignment % sizeof (void *) != 0
           || !powerof2 (alignment / sizeof (void *))
           || alignment == 0)
@@ -71,4 +71,4 @@ EXT_C int posix_memalign(void** memptr, size_t alignment, size_t size) {
         return 0;
     }
     return ENOMEM;
-}
+}*/

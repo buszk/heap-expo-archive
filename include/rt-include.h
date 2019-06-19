@@ -63,7 +63,6 @@ public:
     void deallocate(T* p, std::size_t) noexcept { __free(p); }
 };
 
-
 template <typename T>
 using he_vector = std::vector<T, he_allocator<T>>;
 
@@ -90,8 +89,8 @@ static const char* getTypeString(int typeVal) {
 struct object_info_t {
     size_t            size      ;
     memory_type_e     type      ;
-    he_set<uintptr_t> in_edges  ;
-    he_set<uintptr_t> out_edges ;
+    he_unordered_set<uintptr_t> in_edges  ;
+    he_unordered_set<uintptr_t> out_edges ;
     
     object_info_t () {
         size = 0;
