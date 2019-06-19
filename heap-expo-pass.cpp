@@ -12,6 +12,7 @@
 
 #include <exception>
 #include <cxxabi.h>
+#include <sstream>
 
 #include <vector>
 
@@ -19,7 +20,7 @@
 #define LVL_WARNING 2
 #define LVL_INFO    3
 #define LVL_DEBUG   4
-#define DEBUG_LVL LVL_ERROR
+#define DEBUG_LVL LVL_INFO
 #define LOG(LVL) ((DEBUG_LVL >= LVL) ? llvm::errs() : llvm::nulls())
 
 
@@ -121,6 +122,21 @@ static void addToGlobalCtors(Module *M, Function* F) {
     }
 }
 
+static bool isStackPtr(Value *V) {
+    if (!isa<User>(V))
+        return false;
+
+    User *U = (User*)V;
+
+    if (isa<AllocaInst>(U)) {
+        return true;
+    }
+    else if (isa<BinaryOperator>(U)) {
+        return isStackPtr(U->getOperand(0)) || isStackPtr(U->getOperand(1));
+    }
+    return false;
+}
+
 struct HeapExpoGlobalTracker : public ModulePass {
     static char ID;
 
@@ -133,6 +149,7 @@ struct HeapExpoGlobalTracker : public ModulePass {
 
 
     virtual bool runOnModule(Module &Mod) {
+        size_t global_instr_cnt = 0;
         M = &Mod;
         if (!initialized)
             doInitialization(Mod);
@@ -170,10 +187,15 @@ struct HeapExpoGlobalTracker : public ModulePass {
             Value *size = ConstantInt::get(SizeTy(M), elementSize);
             Args.push_back(size);
             Builder.CreateCall(GlobalHookFunc, Args);
+            global_instr_cnt ++;
         }
         
         Builder.CreateRet(NULL);
-
+        
+        std::ostringstream ss;
+        ss << "Instrumented tracking to " << global_instr_cnt << 
+            " global variables\n";
+        LOG(LVL_INFO) << ss.str();
         return false;
     }
 
@@ -194,6 +216,8 @@ struct HeapExpo : public FunctionPass {
     bool initialized;
     Function *regptr, *deregptr;
     Module *M;
+    size_t store_instr_cnt = 0;
+    size_t stack_store_instr_cnt = 0;
 
     HeapExpo() : FunctionPass(ID) { initialized = false; }
 
@@ -213,9 +237,9 @@ struct HeapExpo : public FunctionPass {
     bool runOnFunction(Function &F) override {
 //        if (F.getName() == "regptr") return false;
 //        if (F.getName() == "deregptr") return false;
+        LOG(LVL_DEBUG) << "HeapExpo: ";
+        LOG(LVL_DEBUG).write_escaped(demangleName(F.getName())) << '\n';
         M = F.getParent();
-        LOG(LVL_INFO) << "HeapExpo: ";
-        LOG(LVL_INFO).write_escaped(demangleName(F.getName())) << '\n';
         if (!initialized) 
             initialize();
         for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
@@ -242,6 +266,8 @@ struct HeapExpo : public FunctionPass {
                         CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
                         deregptr_call->insertAfter(cast_loc);
                         deregptr_call->setDebugLoc(DLoc);
+                        
+                        store_instr_cnt ++;
 
                     } else {
                         LOG(LVL_DEBUG) << "Value is a ptr\n";
@@ -249,6 +275,12 @@ struct HeapExpo : public FunctionPass {
                         DebugLoc DLoc = I->getDebugLoc();
                         if (!DLoc)
                             DLoc = DebugLoc::get(0, 0, (MDNode*)F.getSubprogram());
+                       
+                        /* Don't instr if storing to stack */
+                        if (isStackPtr(SI->getPointerOperand())){
+                            stack_store_instr_cnt++;
+                            continue;
+                        }
 
                         std::vector <Value*> Args;
                         CastInst *cast_loc =
@@ -265,13 +297,27 @@ struct HeapExpo : public FunctionPass {
                         regptr_call->insertAfter(cast_val);
                         regptr_call->setDebugLoc(DLoc);
 
+                        
+                        if (isStackPtr(SI->getValueOperand()))
+                            
 
+                        store_instr_cnt ++;
 
                     }
 
                 }
             }
         }
+
+        return false;
+    }
+    bool doFinalization(Module &Mod) override {
+        std::ostringstream ss;
+        ss << "Instrumented tracking to " << store_instr_cnt << 
+            " all store instructions\n";
+        ss << "Instrumented tracking to " << stack_store_instr_cnt << 
+            " stack store instructions\n";
+        LOG(LVL_INFO) << ss.str();
         return false;
     }
 }; // end of struct HeapExpo
