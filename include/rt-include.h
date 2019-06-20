@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <map>
 #include <unordered_map>
+#include <mutex>
 
 #define EXT_C extern "C"
 
@@ -90,23 +91,36 @@ struct object_info_t {
     size_t                      size      ;
     memory_type_e               type      ;
     he_unordered_set<uintptr_t> in_edges  ;
+    std::mutex                  in_mutex  ;
     he_unordered_set<uintptr_t> out_edges ;
+    std::mutex                  out_mutex ;
     
     object_info_t () {
         size = 0;
         type = UNKNOWN;
+        in_edges = {};
+        out_edges = {};
     }
 
     object_info_t (size_t s) {
         size = s;
         type = UNKNOWN;
+        in_edges = {};
+        out_edges = {};
     }
 
     object_info_t (size_t s, memory_type_e t) {
         size = s;
         type = t;
+        in_edges = {};
+        out_edges = {};
     }
-
+/*
+    object_info_t (object_info_t &copy) {
+        size = copy.size;
+        type = copy.type;
+    }
+*/
 };
 
 struct pointer_info_t {
@@ -136,5 +150,6 @@ struct pointer_info_t {
         src_info = si;
         dst_info = di;
         invalid = 0;
-    }
+    } 
+
 };

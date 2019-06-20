@@ -86,7 +86,8 @@ EXT_C void global_hook(char* addr, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)addr;
     PRINTF("[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
-    memory_objects[ptr] = object_info_t(size, GLOBAL);
+    memory_objects[ptr].size = size;
+    memory_objects[ptr].type = GLOBAL;
 }
 
 void __attribute__((constructor (-1))) init_rt(void) {
@@ -98,7 +99,8 @@ void __attribute__((constructor (-1))) init_rt(void) {
 
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
     /* Add heap object to memory_objects. Simple */
-    memory_objects[ptr] = object_info_t(size, HEAP);
+    memory_objects[ptr].size = size;
+    memory_objects[ptr].type = HEAP;
 }
 
 /* XXX: unwind stack */
@@ -159,7 +161,9 @@ inline void dealloc_hook_(uintptr_t ptr) {
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
         it->second.invalid = true;
     }
+    moit->second.in_mutex.lock();
     moit->second.in_edges.clear();
+    moit->second.in_mutex.unlock();
 
     /* Erase ptrs in this heap object */
     for (uintptr_t ptr_loc: moit->second.out_edges) {
@@ -168,9 +172,11 @@ inline void dealloc_hook_(uintptr_t ptr) {
         assert(it != ptr_record.end());
         if (!it->second.invalid) {
             struct object_info_t *dst_obj_info = it->second.dst_info;
+            dst_obj_info->in_mutex.lock();
             if (!dst_obj_info->in_edges.erase(ptr_loc)) {
                 assert(false && "Cannot remove ptr_loc");
             }
+            dst_obj_info->in_mutex.unlock();
         }
         ptr_record.erase(it);
     }
@@ -215,19 +221,34 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
         /* Iterate every objects old object points to */
         for (uintptr_t ptr_loc: memory_objects[oldptr].out_edges) {
 
-            /* Update outedges */
-            memory_objects[newptr].out_edges.insert(ptr_loc+offset);
+
 
             /* Update inedges */
             auto it = ptr_record.find(ptr_loc);
-            if (it == ptr_record.end()) 
+            assert (it != ptr_record.end()) ;
+            uintptr_t cur_val = *(uintptr_t*)(ptr_loc+offset);
+            /* If value changed, we don't move this ptr */
+            if (cur_val != it->second.value) {
+                PRINTF("PTR[%016lx] value has changed\n", ptr_loc);
+                ptr_record.erase(it);
                 continue;
-            assert (it->second.dst_info);
-            if (! it->second.dst_info->in_edges.erase(ptr_loc))
-                assert(false && "in edge problem");
+            }
 
             PRINTF("MOVING PTR[%016lx] to %016lx, OFFSET:%016lx\n", ptr_loc, ptr_loc+offset, offset);
+            assert (it->second.dst_info);
+            assert (memory_objects.find(it->second.dst_obj) != memory_objects.end());
+            assert (it->second.dst_info == &memory_objects[it->second.dst_obj]);
+            it->second.dst_info->in_mutex.lock();
+            if (! it->second.dst_info->in_edges.erase(ptr_loc))
+                assert(false && "in edge problem");
+            it->second.dst_info->in_mutex.unlock();
+
+            it->second.dst_info->in_mutex.lock();
             it->second.dst_info->in_edges.insert(ptr_loc+offset);
+            it->second.dst_info->in_mutex.unlock();
+
+            /* Update outedges */
+            memory_objects[newptr].out_edges.insert(ptr_loc+offset);
 
             /* Update ptr_record */
             assert(it != ptr_record.end());
@@ -267,10 +288,12 @@ inline void deregptr_dst(he_unordered_map<uintptr_t, struct pointer_info_t>::ite
     /* Remove ptr from dst_obj's in_edges if ptr isn't invalidated */
     if (!it->second.invalid) {
         assert(it->second.dst_info && "dst_obj in_edges not cleared");
+        it->second.dst_info->in_mutex.lock();
         if (! it->second.dst_info->in_edges.erase(it->first)) {
             PRINTF("dst_obj: loc:%016lx\n", it->second.dst_obj);
             assert (false && "deregptr in edge problem");
         }
+        it->second.dst_info->in_mutex.unlock();
     } 
 }
 
@@ -314,7 +337,9 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     
     /* Create an edge if src and dst are both in memory_objects*/
     if (obj_addr && ptr_obj_addr && obj_addr != ptr_obj_addr) {
+        obj_info->in_mutex.lock();
         obj_info->in_edges.insert(ptr_loc);
+        obj_info->in_mutex.unlock();
         ptr_obj_info->out_edges.insert(ptr_loc);
         ptr_record[ptr_loc] = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
                                                 ptr_obj_info, obj_info);
