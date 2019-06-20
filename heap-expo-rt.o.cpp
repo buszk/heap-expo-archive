@@ -8,6 +8,8 @@
 #include <stdarg.h>
 #include <pthread.h>
 
+#include <shared_mutex>
+
 #include "rt-include.h"
 
 
@@ -26,9 +28,33 @@
 using namespace std;
 
 he_map<uintptr_t, struct object_info_t> memory_objects;
+mutex obj_mutex;
 he_unordered_map<uintptr_t, struct pointer_info_t> ptr_record; // Log all all ptrs and the object addr 
+int ptr_reader = 0;
+shared_mutex ptr_mutex;
 
 bool he_initialized = false;
+
+inline void start_read_ptr() {
+    /*
+    ptr_reader_mutex.lock();
+    ptr_reader ++;
+    if (ptr_reader == 1) ptr_mutex.lock();
+    ptr_reader_mutex.unlock();
+    */
+    ptr_mutex.lock_shared();
+}
+
+inline void end_read_ptr() {
+    /*
+    ptr_reader_mutex.lock();
+    ptr_reader --;
+    if (ptr_reader == 0) ptr_mutex.unlock();
+    ptr_reader_mutex.unlock();
+    */
+    ptr_mutex.unlock_shared();
+}
+
 
 #if DEBUG_LVL == 1
 int debug_mode = 0; 
@@ -43,13 +69,14 @@ void __printf(const char * format, ...) {
     if (debug_mode == 2) return;
 #endif
 
-    int n;
+    int n1, n2, n3;
     char str[256] = {0};
     va_list args;
+    n1 = snprintf(str, 18, "[%016lx]", pthread_self());
     va_start(args, format);
-    n = vsnprintf(str, 256, format, args);
+    n2 = vsnprintf(str+n1, 256, format, args);
     va_end(args);
-    if (!(n = write(2, str, n))) 
+    if (!(n3 = write(2, str, n1+n2))) 
         abort();
 }
 #endif
@@ -122,10 +149,13 @@ inline void dealloc_hook_(uintptr_t ptr) {
 
     /* Invalidate ptrs that point to this heap object */
     for (uintptr_t ptr_loc: moit->second.in_edges) {
+        start_read_ptr();
         auto it = ptr_record.find(ptr_loc);
+        end_read_ptr();
         if (it == ptr_record.end()) {
             PRINTF("Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
             assert(false && "cannot find ptr in ptr_record");
+            return;
         }
 
         assert(ptr == it->second.dst_obj);
@@ -149,7 +179,9 @@ inline void dealloc_hook_(uintptr_t ptr) {
                 PRINTF("Current value: %016lx\n", cur_val);
                 if (!src_obj_info->out_edges.erase(ptr_loc)) 
                     assert(false &&"smoit incongruence");
+                ptr_mutex.lock();
                 ptr_record.erase(it);
+                ptr_mutex.unlock();
                 continue;
             }
         }
@@ -167,7 +199,9 @@ inline void dealloc_hook_(uintptr_t ptr) {
 
     /* Erase ptrs in this heap object */
     for (uintptr_t ptr_loc: moit->second.out_edges) {
+        start_read_ptr();
         auto it = ptr_record.find(ptr_loc);
+        end_read_ptr();
         PRINTF("[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, moit->first);
         assert(it != ptr_record.end());
         if (!it->second.invalid) {
@@ -178,7 +212,9 @@ inline void dealloc_hook_(uintptr_t ptr) {
             }
             dst_obj_info->in_mutex.unlock();
         }
+        ptr_mutex.lock();
         ptr_record.erase(it);
+        ptr_mutex.unlock();
     }
     moit->second.out_edges.clear();
 
@@ -224,13 +260,17 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
 
 
             /* Update inedges */
+            start_read_ptr();
             auto it = ptr_record.find(ptr_loc);
+            end_read_ptr();
             assert (it != ptr_record.end()) ;
             uintptr_t cur_val = *(uintptr_t*)(ptr_loc+offset);
             /* If value changed, we don't move this ptr */
             if (cur_val != it->second.value) {
                 PRINTF("PTR[%016lx] value has changed\n", ptr_loc);
+                ptr_mutex.lock();
                 ptr_record.erase(it);
+                ptr_mutex.unlock();
                 continue;
             }
 
@@ -252,10 +292,12 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
 
             /* Update ptr_record */
             assert(it != ptr_record.end());
+            ptr_mutex.lock();
             swap(ptr_record[ptr_loc+offset], it->second);
+            ptr_record.erase(it);
+            ptr_mutex.unlock();
             ptr_record[ptr_loc+offset].src_obj += offset;
             ptr_record[ptr_loc+offset].src_info = &memory_objects[newptr];
-            ptr_record.erase(it);
 
         }
         memory_objects[oldptr].out_edges.clear();
@@ -309,11 +351,15 @@ inline void deregptr_src(he_unordered_map<uintptr_t, struct pointer_info_t>::ite
 
 inline void deregptr_(uintptr_t ptr_loc) {
 
+    start_read_ptr();
     auto it = ptr_record.find(ptr_loc);
+    end_read_ptr();
     if (it != ptr_record.end()) {
-         deregptr_dst(it);
-         deregptr_src(it);
-         ptr_record.erase(it);
+        deregptr_dst(it);
+        deregptr_src(it);
+        ptr_mutex.lock();
+        ptr_record.erase(it);
+        ptr_mutex.unlock();
     }
 }
 
@@ -341,8 +387,10 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
         obj_info->in_edges.insert(ptr_loc);
         obj_info->in_mutex.unlock();
         ptr_obj_info->out_edges.insert(ptr_loc);
+        ptr_mutex.lock();
         ptr_record[ptr_loc] = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
                                                 ptr_obj_info, obj_info);
+        ptr_mutex.unlock();
     }
 }
 

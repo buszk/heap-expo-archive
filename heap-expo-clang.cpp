@@ -65,6 +65,7 @@ int main(int argc, char** argv) {
      */
     if (maybe_linking) {
         params.push_back("-flto");
+        params.push_back("-lpthread");
 
         if (x_set) {
             params.push_back("-x");

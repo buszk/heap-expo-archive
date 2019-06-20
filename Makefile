@@ -7,7 +7,7 @@ CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign
 
 CXXFLAGS   ?= -O3 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
-			 -Wno-variadic-macros
+			 -Wno-variadic-macros -std=c++17
 
 RTFLAGS     = -flto -Iinclude
 
