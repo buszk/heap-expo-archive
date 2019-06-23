@@ -4,7 +4,7 @@
 #include <unordered_set>
 #include <map>
 #include <unordered_map>
-#include <mutex>
+#include <shared_mutex>
 
 #define EXT_C extern "C"
 
@@ -91,9 +91,9 @@ struct object_info_t {
     size_t                      size      ;
     memory_type_e               type      ;
     he_unordered_set<uintptr_t> in_edges  ;
-    std::mutex                  in_mutex  ;
+    std::shared_mutex           in_mutex  ;
     he_unordered_set<uintptr_t> out_edges ;
-    std::mutex                  out_mutex ;
+    std::shared_mutex           out_mutex ;
     
     object_info_t () {
         size = 0;

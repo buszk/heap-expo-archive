@@ -54,7 +54,7 @@ EXT_C void* pvalloc(size_t size) {
     alloc_hook((char*)res, size);
     return res;
 }
-/*
+
 EXT_C int posix_memalign(void** memptr, size_t alignment, size_t size) {
     void *mem;
     msg("[posix_memalign]");
@@ -72,4 +72,3 @@ EXT_C int posix_memalign(void** memptr, size_t alignment, size_t size) {
     }
     return ENOMEM;
 }
-*/
