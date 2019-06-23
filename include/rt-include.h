@@ -91,9 +91,11 @@ struct object_info_t {
     size_t                      size      ;
     memory_type_e               type      ;
     he_unordered_set<uintptr_t> in_edges  ;
-    std::shared_mutex           in_mutex  ;
     he_unordered_set<uintptr_t> out_edges ;
+#ifdef MULTITHREADING
+    std::shared_mutex           in_mutex  ;
     std::shared_mutex           out_mutex ;
+#endif
     
     object_info_t () {
         size = 0;

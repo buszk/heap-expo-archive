@@ -11,6 +11,8 @@ CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 
 RTFLAGS     = -flto -Iinclude
 
+MTFLAG      = -DMULTITHREADING
+
 INST_LFL    = $(LDFLAGS) heap-expo-rt.o malloc-rt.o -lstdc++ # force c++ linker
 
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS) -Iinclude
@@ -31,14 +33,19 @@ LLVMHeapExpo.so: heap-expo-pass.cpp
 
 heap-expo-rt.o: heap-expo-rt.o.cpp
 	$(CXX) $(CXXFLAGS) $(RTFLAGS) -fPIC -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -fPIC -c $< -o $(@:.o=-mt.o)
 
 heap-expo-rt-32.o: heap-expo-rt.o.cpp
 	@printf "[*] Building 32-bit variant of the runtime (-m32)... "
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) -m32 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+	@$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -m32 -fPIC -c $< -o $(@:.o=-mt.o) 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+
+
 
 heap-expo-rt-64.o: heap-expo-rt.o.cpp
 	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+	@$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -m64 -fPIC -c $< -o $(@:.o=-mt.o) 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
 malloc-rt.o: malloc-rt.o.cpp
 	$(CXX) $(CXXFLAGS) $(RTFLAGS) -fPIC -c $< -o $@

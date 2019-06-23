@@ -11,8 +11,9 @@ int main(int argc, char** argv) {
     std::string argv0(argv[0]);
     std::string obj_path;
     std::vector<std::string> params;
-    bool maybe_linking = true,
-         x_set         = false;
+    bool maybe_linking   = true,
+         x_set           = false,
+         multi_threading = false;;
     int bit_mode = 0;
 
     if (argc < 2) {
@@ -57,6 +58,9 @@ int main(int argc, char** argv) {
         
         if (cur == "-x")
             x_set = true;
+
+        if (cur == "-pthread" || cur == "-lpthread") 
+            multi_threading = true;
     }
 
     /* 
@@ -71,15 +75,21 @@ int main(int argc, char** argv) {
             params.push_back("-x");
             params.push_back("none");
         }
+
+        std::string suffix;
+        if (multi_threading)
+            suffix = "-rt.o";
+        else
+            suffix = ".o";
             
         switch (bit_mode) {
             case 0:
-                params.push_back(obj_path + "/heap-expo-rt.o");
+                params.push_back(obj_path + "/heap-expo-rt" + suffix);
                 params.push_back(obj_path + "/malloc-rt.o");
                 break;
 
             case 32:
-                params.push_back(obj_path + "/heap-expo-rt-32.o");
+                params.push_back(obj_path + "/heap-expo-rt-32" + suffix);
                 params.push_back(obj_path + "/malloc-rt-32.o");
                 if (access(params[params.size()-1].c_str(), R_OK) ||
                     access(params[params.size()-2].c_str(), R_OK))  {
@@ -89,7 +99,7 @@ int main(int argc, char** argv) {
                 break;
 
             case 64:
-                params.push_back(obj_path + "/heap-expo-rt-64.o");
+                params.push_back(obj_path + "/heap-expo-rt-64" + suffix);
                 params.push_back(obj_path + "/malloc-rt-64.o");
                 if (access(params[params.size()-1].c_str(), R_OK) ||
                     access(params[params.size()-2].c_str(), R_OK))  {

@@ -27,10 +27,18 @@
 
 using namespace std;
 
+#ifdef MULTITHREADING
 #define LOCK(mtx) mtx.lock()
 #define UNLOCK(mtx) mtx.unlock()
 #define SLOCK(mtx) mtx.lock_shared()
 #define SUNLOCK(mtx) mtx.unlock_shared()
+#else
+#define LOCK(mtx)
+#define UNLOCK(mtx)
+#define SLOCK(mtx)
+#define SUNLOCK(mtx)
+#endif
+
 
 he_map<uintptr_t, struct object_info_t> memory_objects;
 shared_mutex obj_mutex;
@@ -271,14 +279,12 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
             assert (it->second.dst_info);
             assert (memory_objects.find(it->second.dst_obj) != memory_objects.end());
             assert (it->second.dst_info == &memory_objects[it->second.dst_obj]);
-            it->second.dst_info->in_mutex.lock();
+            LOCK(it->second.dst_info->in_mutex);
             if (! it->second.dst_info->in_edges.erase(ptr_loc))
                 assert(false && "in edge problem");
-            it->second.dst_info->in_mutex.unlock();
 
-            it->second.dst_info->in_mutex.lock();
             it->second.dst_info->in_edges.insert(ptr_loc+offset);
-            it->second.dst_info->in_mutex.unlock();
+            UNLOCK(it->second.dst_info->in_mutex);
 
             /* Update outedges */
             memory_objects[newptr].out_edges.insert(ptr_loc+offset);
