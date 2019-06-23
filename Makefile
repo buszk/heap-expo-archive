@@ -3,8 +3,7 @@ CXX = clang++-7
 LLVM_CONFIG ?= llvm-config-7
 
 CFLAGS     ?= -O3 -funroll-loops
-CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign
-
+CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign 
 CXXFLAGS   ?= -O3 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 			 -Wno-variadic-macros -std=c++17
@@ -63,4 +62,4 @@ test_build: $(PROGS)
 	./heap-expo-clang++ ./test-instr-cxx.cpp -o test-instr-cxx
 
 clean:
-	rm -f $(PROGS) ./test-instr ./test-instr-cxx
+	rm -f $(PROGS) ./test-instr ./test-instr-cxx ./heap-expo-clang++

@@ -117,12 +117,11 @@ struct object_info_t {
         in_edges = {};
         out_edges = {};
     }
-/*
-    object_info_t (object_info_t &copy) {
+    
+    object_info_t (const object_info_t &copy) {
         size = copy.size;
         type = copy.type;
     }
-*/
 };
 
 struct pointer_info_t {
@@ -153,5 +152,15 @@ struct pointer_info_t {
         dst_info = di;
         invalid = 0;
     } 
+
+    pointer_info_t (const pointer_info_t &copy) {
+        value = copy.value;
+        src_obj = copy.src_obj;
+        dst_obj = copy.dst_obj;
+        src_info = copy.src_info;
+        dst_info = copy.dst_info;
+        invalid = copy.invalid;
+
+    }
 
 };

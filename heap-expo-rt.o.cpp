@@ -6,9 +6,12 @@
 #include <assert.h>
 #include <unistd.h>
 #include <stdarg.h>
-#include <pthread.h>
 
-#include <shared_mutex>
+#if __x86_64__
+#include <libunwind.h>
+#else
+#include <libunwind-x86.h>
+#endif
 
 #include "rt-include.h"
 
@@ -28,6 +31,7 @@
 using namespace std;
 
 #ifdef MULTITHREADING
+#include <pthread.h>
 #define LOCK(mtx) mtx.lock()
 #define UNLOCK(mtx) mtx.unlock()
 #define SLOCK(mtx) mtx.lock_shared()
@@ -40,9 +44,9 @@ using namespace std;
 #endif
 
 
-he_map<uintptr_t, struct object_info_t> memory_objects;
+he_map<uintptr_t, struct object_info_t> *memory_objects;
 shared_mutex obj_mutex;
-he_unordered_map<uintptr_t, struct pointer_info_t> ptr_record; // Log all all ptrs and the object addr 
+he_unordered_map<uintptr_t, struct pointer_info_t> *ptr_record; // Log all all ptrs and the object addr 
 shared_mutex ptr_mutex;
 
 bool he_initialized = false;
@@ -82,7 +86,7 @@ EXT_C void msg(const char* str) {
 void print_memory_objects() {
     SLOCK(obj_mutex);
     PRINTF("Objects List:\n");
-    for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
+    for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
         PRINTF("%s Object: %016lx:%016lx\n", getTypeString(it->second.type), it->first, it->second.size);
     }
     SUNLOCK(obj_mutex);
@@ -92,10 +96,10 @@ void print_edges() {
     PRINTF("Edges List:\n");
     SLOCK(obj_mutex);
     SLOCK(ptr_mutex);
-    for (auto it = memory_objects.begin(); it != memory_objects.end(); it++) {
+    for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
         for (uintptr_t ptr_loc: it->second.out_edges) {
-            assert(ptr_record.find(ptr_loc) != ptr_record.end() && "ptr_record does not have this ptr");
-            PRINTF("Heap Edge: %016lx->%016lx\n", it->first, ptr_record[ptr_loc].dst_obj);
+            assert(ptr_record->find(ptr_loc) != ptr_record->end() && "ptr_record does not have this ptr");
+            PRINTF("Heap Edge: %016lx->%016lx\n", it->first, ptr_record->at(ptr_loc).dst_obj);
         }
     }
     SUNLOCK(ptr_mutex);
@@ -112,22 +116,28 @@ EXT_C void global_hook(char* addr, size_t size) {
     uintptr_t ptr = (uintptr_t)addr;
     PRINTF("[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
     LOCK(obj_mutex);
-    memory_objects[ptr].size = size;
-    memory_objects[ptr].type = GLOBAL;
+    memory_objects->insert(make_pair<>(ptr, object_info_t(size, GLOBAL)));
     UNLOCK(obj_mutex);
 }
 
 void __attribute__((constructor (-1))) init_rt(void) {
-    new(&memory_objects) he_map<uintptr_t, struct object_info_t>;
-    new(&ptr_record) he_unordered_map<uintptr_t, struct pointer_info_t>;
+    memory_objects = (he_map<uintptr_t, struct object_info_t>*)__malloc(sizeof(he_map<uintptr_t, struct object_info_t>));
+    new(memory_objects) he_map<uintptr_t, struct object_info_t>;
+    ptr_record = (he_unordered_map<uintptr_t, struct pointer_info_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, struct pointer_info_t>));
+    new(ptr_record) he_unordered_map<uintptr_t, struct pointer_info_t>;
     PRINTF("STL objects initialized\n");
     he_initialized = true;
 }
 
+void __attribute__((destructor (65535))) fini_rt(void) {
+    print_heap();
+    __free(ptr_record);
+    __free(memory_objects);
+}
+
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
     /* Add heap object to memory_objects. Simple */
-    memory_objects[ptr].size = size;
-    memory_objects[ptr].type = HEAP;
+    memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP)));
 }
 
 /* XXX: unwind stack */
@@ -144,16 +154,16 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
 
 inline void dealloc_hook_(uintptr_t ptr) {
 
-    auto moit = memory_objects.find(ptr);
-    if (moit == memory_objects.end()) {
+    auto moit = memory_objects->find(ptr);
+    if (moit == memory_objects->end()) {
         return;
     }
     
     /* Invalidate ptrs that point to this heap object */
     SLOCK(moit->second.in_mutex);
     for (uintptr_t ptr_loc: moit->second.in_edges) {
-        auto it = ptr_record.find(ptr_loc);
-        if (it == ptr_record.end()) {
+        auto it = ptr_record->find(ptr_loc);
+        if (it == ptr_record->end()) {
             PRINTF("Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
             assert(false && "cannot find ptr in ptr_record");
             continue;
@@ -175,7 +185,7 @@ inline void dealloc_hook_(uintptr_t ptr) {
                 if (!src_obj_info->out_edges.erase(ptr_loc)) 
                     assert(false &&"smoit incongruence");
 
-                ptr_record.erase(it);
+                ptr_record->erase(it);
 
                 continue;
             }
@@ -196,9 +206,9 @@ inline void dealloc_hook_(uintptr_t ptr) {
 
     /* Erase ptrs in this heap object */
     for (uintptr_t ptr_loc: moit->second.out_edges) {
-        auto it = ptr_record.find(ptr_loc);
+        auto it = ptr_record->find(ptr_loc);
         PRINTF("[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, moit->first);
-        assert(it != ptr_record.end());
+        assert(it != ptr_record->end());
         if (!it->second.invalid) {
             struct object_info_t *dst_obj_info = it->second.dst_info;
             LOCK(dst_obj_info->in_mutex);
@@ -207,13 +217,13 @@ inline void dealloc_hook_(uintptr_t ptr) {
             }
             UNLOCK(dst_obj_info->in_mutex);
         }
-        ptr_record.erase(it);
+        ptr_record->erase(it);
     }
 
 
     moit->second.out_edges.clear();
 
-    memory_objects.erase(moit);
+    memory_objects->erase(moit);
 }
 
 /* XXX: unwind stack */
@@ -246,7 +256,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     int offset = newptr - oldptr;
     PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     if (offset == 0) {
-        memory_objects[newptr].size = newsize;
+        memory_objects->at(newptr).size = newsize;
         UNLOCK(ptr_mutex);
         UNLOCK(obj_mutex);
         return;
@@ -259,26 +269,26 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
 
     if (newptr && newsize && oldptr) {
         /* Iterate every objects old object points to */
-        for (uintptr_t ptr_loc: memory_objects[oldptr].out_edges) {
+        for (uintptr_t ptr_loc: memory_objects->at(oldptr).out_edges) {
 
 
 
             /* Update inedges */
 
-            auto it = ptr_record.find(ptr_loc);
-            assert (it != ptr_record.end()) ;
+            auto it = ptr_record->find(ptr_loc);
+            assert (it != ptr_record->end()) ;
             uintptr_t cur_val = *(uintptr_t*)(ptr_loc+offset);
             /* If value changed, we don't move this ptr */
             if (cur_val != it->second.value) {
                 PRINTF("PTR[%016lx] value has changed\n", ptr_loc);
-                ptr_record.erase(it);
+                ptr_record->erase(it);
                 continue;
             }
 
             PRINTF("MOVING PTR[%016lx] to %016lx, OFFSET:%016lx\n", ptr_loc, ptr_loc+offset, offset);
             assert (it->second.dst_info);
-            assert (memory_objects.find(it->second.dst_obj) != memory_objects.end());
-            assert (it->second.dst_info == &memory_objects[it->second.dst_obj]);
+            assert (memory_objects->find(it->second.dst_obj) != memory_objects->end());
+            assert (it->second.dst_info == &memory_objects->at(it->second.dst_obj));
             LOCK(it->second.dst_info->in_mutex);
             if (! it->second.dst_info->in_edges.erase(ptr_loc))
                 assert(false && "in edge problem");
@@ -287,17 +297,17 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
             UNLOCK(it->second.dst_info->in_mutex);
 
             /* Update outedges */
-            memory_objects[newptr].out_edges.insert(ptr_loc+offset);
+            memory_objects->at(newptr).out_edges.insert(ptr_loc+offset);
 
             /* Update ptr_record */
-            assert(it != ptr_record.end());
-            swap(ptr_record[ptr_loc+offset], it->second);
-            ptr_record.erase(it);
-            ptr_record[ptr_loc+offset].src_obj += offset;
-            ptr_record[ptr_loc+offset].src_info = &memory_objects[newptr];
+            assert(it != ptr_record->end());
+            ptr_record->insert(make_pair<>(ptr_loc+offset, it->second));
+            ptr_record->erase(it);
+            ptr_record->at(ptr_loc+offset).src_obj += offset;
+            ptr_record->at(ptr_loc+offset).src_info = &memory_objects->at(newptr);
 
         }
-        memory_objects[oldptr].out_edges.clear();
+        memory_objects->at(oldptr).out_edges.clear();
     }
     if (oldptr)
         dealloc_hook_(oldptr);
@@ -311,8 +321,8 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
  * this ptr_val points to as long as it's with the range
  */
 bool get_object_addr(uintptr_t addr, uintptr_t &object_addr, struct object_info_t* &object_info) {
-    auto it = memory_objects.upper_bound(addr);
-    if (it == memory_objects.begin()) {
+    auto it = memory_objects->upper_bound(addr);
+    if (it == memory_objects->begin()) {
         return 0;
     }
     it--;
@@ -352,13 +362,13 @@ inline void deregptr_src(he_unordered_map<uintptr_t, struct pointer_info_t>::ite
 inline void deregptr_(uintptr_t ptr_loc) {
 
     SLOCK(ptr_mutex);
-    auto it = ptr_record.find(ptr_loc);
-    if (it != ptr_record.end()) {
+    auto it = ptr_record->find(ptr_loc);
+    if (it != ptr_record->end()) {
         deregptr_dst(it);
         deregptr_src(it);
         SUNLOCK(ptr_mutex);
         LOCK(ptr_mutex);
-        ptr_record.erase(ptr_loc);
+        ptr_record->erase(ptr_loc);
         UNLOCK(ptr_mutex);
     }
     else 
@@ -393,8 +403,8 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
         UNLOCK(obj_info->in_mutex);
         ptr_obj_info->out_edges.insert(ptr_loc);
         LOCK(ptr_mutex);
-        ptr_record[ptr_loc] = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
-                                                ptr_obj_info, obj_info);
+        ptr_record->insert(make_pair<>(ptr_loc, pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
+                                                ptr_obj_info, obj_info)));
         UNLOCK(ptr_mutex);
     }
     SUNLOCK(obj_mutex);

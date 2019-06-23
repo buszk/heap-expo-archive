@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
 
         std::string suffix;
         if (multi_threading)
-            suffix = "-rt.o";
+            suffix = "-mt.o";
         else
             suffix = ".o";
             
