@@ -276,11 +276,11 @@ struct HeapExpo : public FunctionPass {
                         std::vector <Value*> Args;
                         CastInst *cast_loc =
                             CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
-                        cast_loc->insertAfter(I);
+                        cast_loc->insertBefore(I);
                         cast_loc->setDebugLoc(DLoc);
                         Args.push_back((Value*)cast_loc);
                         CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
-                        deregptr_call->insertAfter(cast_loc);
+                        deregptr_call->insertBefore(I);
                         deregptr_call->setDebugLoc(DLoc);
                         
                         store_instr_cnt ++;
@@ -298,7 +298,8 @@ struct HeapExpo : public FunctionPass {
                             continue;
                         }
 
-                        if (isConstantGlobalPtr(SI->getValueOperand())) {
+                        //if (isConstantGlobalPtr(SI->getValueOperand())) {
+                        if (isa<Constant>(SI->getValueOperand())) {
                             store_const_global_cnt++;
                             continue;
                         }
@@ -306,16 +307,16 @@ struct HeapExpo : public FunctionPass {
                         std::vector <Value*> Args;
                         CastInst *cast_loc =
                             CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
-                        cast_loc->insertAfter(I);
+                        cast_loc->insertBefore(I);
                         cast_loc->setDebugLoc(DLoc);
                         Args.push_back((Value*)cast_loc);
                         CastInst *cast_val =
                             CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
-                        cast_val->insertAfter(cast_loc);
+                        cast_val->insertBefore(I);
                         cast_val->setDebugLoc(DLoc);
                         Args.push_back((Value*)cast_val);
                         CallInst *regptr_call = CallInst::Create(regptr, Args, "");
-                        regptr_call->insertAfter(cast_val);
+                        regptr_call->insertBefore(I);
                         regptr_call->setDebugLoc(DLoc);
 
                         

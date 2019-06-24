@@ -145,7 +145,7 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
-    if (ptr && size) {
+    if (ptr) {
         LOCK(obj_mutex);
         alloc_hook_(ptr, size);
         UNLOCK(obj_mutex);
@@ -262,12 +262,12 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
         return;
     }
     
-    if (newptr && newsize)
+    if (newptr)
         alloc_hook_(newptr, newsize);
 
     //size_t oldsize = memory_objects[oldptr].size;
 
-    if (newptr && newsize && oldptr) {
+    if (newptr && oldptr) {
         /* Iterate every objects old object points to */
         for (uintptr_t ptr_loc: memory_objects->at(oldptr).out_edges) {
 
@@ -385,9 +385,14 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
     obj_addr = ptr_obj_addr = 0;
     obj_info = ptr_obj_info = NULL;
     
+    if (*(uintptr_t*)ptr_loc == ptr_val ) {
+        return;
+    }
+
     SLOCK(obj_mutex);
     deregptr_(ptr_loc);
-    if (ptr_val < 256) {
+
+    if (ptr_val < 4086) {
         SUNLOCK(obj_mutex);
         return;
     }
