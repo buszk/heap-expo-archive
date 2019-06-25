@@ -231,6 +231,7 @@ struct HeapExpo : public FunctionPass {
     bool initialized;
     Function *regptr, *deregptr;
     Module *M;
+    Function *func;
     size_t store_instr_cnt = 0;
     size_t stack_store_instr_cnt = 0;
     size_t store_const_global_cnt = 0;
@@ -250,12 +251,52 @@ struct HeapExpo : public FunctionPass {
 
     }
 
+    void instrDereg(StoreInst *SI) {
+
+        DebugLoc DLoc = SI->getDebugLoc();
+        if (!DLoc)
+            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+
+        std::vector <Value*> Args;
+        CastInst *cast_loc =
+            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
+        cast_loc->insertBefore(SI);
+        cast_loc->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_loc);
+        CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
+        deregptr_call->insertBefore(SI);
+        deregptr_call->setDebugLoc(DLoc);
+    }
+
+    void instrReg(StoreInst *SI) {
+
+        DebugLoc DLoc = SI->getDebugLoc();
+        if (!DLoc)
+            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+       
+        std::vector <Value*> Args;
+        CastInst *cast_loc =
+            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
+        cast_loc->insertBefore(SI);
+        cast_loc->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_loc);
+        CastInst *cast_val =
+            CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
+        cast_val->insertBefore(SI);
+        cast_val->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_val);
+        CallInst *regptr_call = CallInst::Create(regptr, Args, "");
+        regptr_call->insertBefore(SI);
+        regptr_call->setDebugLoc(DLoc);
+    }
+
     bool runOnFunction(Function &F) override {
 //        if (F.getName() == "regptr") return false;
 //        if (F.getName() == "deregptr") return false;
         LOG(LVL_DEBUG) << "HeapExpo: ";
         LOG(LVL_DEBUG).write_escaped(demangleName(F.getName())) << '\n';
         M = F.getParent();
+        func = &F;
         if (!initialized) 
             initialize();
         for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
@@ -268,30 +309,14 @@ struct HeapExpo : public FunctionPass {
                         LOG(LVL_DEBUG) << "Storing to global var\n" ;
                     if (isa<ConstantPointerNull>(SI->getValueOperand())) {
                         LOG(LVL_DEBUG) << "Value is a nullptr\n";
-
-                        DebugLoc DLoc = I->getDebugLoc();
-                        if (!DLoc)
-                            DLoc = DebugLoc::get(0, 0, (MDNode*)F.getSubprogram());
-
-                        std::vector <Value*> Args;
-                        CastInst *cast_loc =
-                            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
-                        cast_loc->insertBefore(I);
-                        cast_loc->setDebugLoc(DLoc);
-                        Args.push_back((Value*)cast_loc);
-                        CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
-                        deregptr_call->insertBefore(I);
-                        deregptr_call->setDebugLoc(DLoc);
+                            
+                        instrDereg(SI);
                         
                         store_instr_cnt ++;
 
                     } else {
                         LOG(LVL_DEBUG) << "Value is a ptr\n";
-
-                        DebugLoc DLoc = I->getDebugLoc();
-                        if (!DLoc)
-                            DLoc = DebugLoc::get(0, 0, (MDNode*)F.getSubprogram());
-                       
+                        
                         /* Don't instr if storing to stack */
                         if (isStackPtr(SI->getPointerOperand())){
                             stack_store_instr_cnt++;
@@ -300,28 +325,12 @@ struct HeapExpo : public FunctionPass {
 
                         //if (isConstantGlobalPtr(SI->getValueOperand())) {
                         if (isa<Constant>(SI->getValueOperand())) {
+                            instrDereg(SI);
                             store_const_global_cnt++;
                             continue;
                         }
 
-                        std::vector <Value*> Args;
-                        CastInst *cast_loc =
-                            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
-                        cast_loc->insertBefore(I);
-                        cast_loc->setDebugLoc(DLoc);
-                        Args.push_back((Value*)cast_loc);
-                        CastInst *cast_val =
-                            CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
-                        cast_val->insertBefore(I);
-                        cast_val->setDebugLoc(DLoc);
-                        Args.push_back((Value*)cast_val);
-                        CallInst *regptr_call = CallInst::Create(regptr, Args, "");
-                        regptr_call->insertBefore(I);
-                        regptr_call->setDebugLoc(DLoc);
-
-                        
-                        if (isStackPtr(SI->getValueOperand()))
-                            
+                        instrReg(SI);
 
                         store_instr_cnt ++;
 
@@ -343,6 +352,10 @@ struct HeapExpo : public FunctionPass {
             " store const global instructions\n";
         LOG(LVL_INFO) << ss.str();
         return false;
+    }
+
+    void getAnalysisUsage(AnalysisUsage &AU) const override {
+        AU.setPreservesCFG();
     }
 }; // end of struct HeapExpo
 }  // end of anonymous namespace
