@@ -347,7 +347,7 @@ static void registerMyPass(const PassManagerBuilder &,
 }
 
 static RegisterStandardPasses
-    RegisterMyPass(PassManagerBuilder::EP_ModuleOptimizerEarly,
+    RegisterMyPass(PassManagerBuilder::EP_OptimizerLast,
             registerMyPass);
 
 static RegisterStandardPasses
