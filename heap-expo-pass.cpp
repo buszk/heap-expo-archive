@@ -73,53 +73,55 @@ static void addToGlobalCtors(Module *M, Function* F) {
 	GlobalVariable *GCL = M->getGlobalVariable("llvm.global_ctors");
     if (GCL) {
         // Filter out the initializer elements to remove.
-        ConstantArray *OldCA = cast<ConstantArray>(GCL->getInitializer());
+        if (isa<ConstantArray>(GCL->getInitializer())) {
+            ConstantArray *OldCA = cast<ConstantArray>(GCL->getInitializer());
 
-        SmallVector<Constant *, 10> CAList;
-        for (unsigned I = 0, E = OldCA->getNumOperands(); I < E; ++I)
-            CAList.push_back(OldCA->getOperand(I));
+            SmallVector<Constant *, 10> CAList;
+            for (unsigned I = 0, E = OldCA->getNumOperands(); I < E; ++I)
+                CAList.push_back(OldCA->getOperand(I));
 
-        CAList.push_back(getCtorStruct(M, F));
+            CAList.push_back(getCtorStruct(M, F));
 
-        // Create the new array initializer.
-        ArrayType *ATy =
-            ArrayType::get(OldCA->getType()->getElementType(), CAList.size());
-        Constant *CA = ConstantArray::get(ATy, CAList);
+            // Create the new array initializer.
+            ArrayType *ATy =
+                ArrayType::get(OldCA->getType()->getElementType(), CAList.size());
+            Constant *CA = ConstantArray::get(ATy, CAList);
 
-        // If we didn't change the number of elements, don't create a new GV.
-        if (CA->getType() == OldCA->getType()) {
-            GCL->setInitializer(CA);
+            // If we didn't change the number of elements, don't create a new GV.
+            if (CA->getType() == OldCA->getType()) {
+                GCL->setInitializer(CA);
+                return;
+            }
+
+            // Create the new global and insert it next to the existing list.
+            GlobalVariable *NGV =
+                new GlobalVariable(CA->getType(), GCL->isConstant(), GCL->getLinkage(),
+                              CA, "", GCL->getThreadLocalMode());
+
+            GCL->getParent()->getGlobalList().insert(GCL->getIterator(), NGV);
+            NGV->takeName(GCL);
+
+            // Nuke the old list, replacing any uses with the new one.
+            if (!GCL->use_empty()) {
+                Constant *V = NGV;
+                if (V->getType() != GCL->getType())
+                    V = ConstantExpr::getBitCast(V, GCL->getType());
+                GCL->replaceAllUsesWith(V);
+            }
+            GCL->eraseFromParent();
             return;
         }
-
-        // Create the new global and insert it next to the existing list.
-        GlobalVariable *NGV =
-            new GlobalVariable(CA->getType(), GCL->isConstant(), GCL->getLinkage(),
-                          CA, "", GCL->getThreadLocalMode());
-
-        GCL->getParent()->getGlobalList().insert(GCL->getIterator(), NGV);
-        NGV->takeName(GCL);
-
-        // Nuke the old list, replacing any uses with the new one.
-        if (!GCL->use_empty()) {
-            Constant *V = NGV;
-            if (V->getType() != GCL->getType())
-                V = ConstantExpr::getBitCast(V, GCL->getType());
-            GCL->replaceAllUsesWith(V);
-        }
+        assert(GCL->use_empty());
         GCL->eraseFromParent();
-
-
     }
-    else {
-        SmallVector<Constant *, 10> CAList;
-        CAList.push_back(getCtorStruct(M, F));
-        ArrayType *ATy = getCtorTy(M, 1);
-        Constant *CA = ConstantArray::get(ATy, CAList);
+    
+    SmallVector<Constant *, 10> CAList;
+    CAList.push_back(getCtorStruct(M, F));
+    ArrayType *ATy = getCtorTy(M, 1);
+    Constant *CA = ConstantArray::get(ATy, CAList);
 
-        GCL = new GlobalVariable(*M, ATy, false, GlobalValue::LinkageTypes::AppendingLinkage, CA, "llvm.global_ctors");
+    GCL = new GlobalVariable(*M, ATy, false, GlobalValue::LinkageTypes::AppendingLinkage, CA, "llvm.global_ctors");
         
-    }
 }
 
 static bool isStackPtr(Value *V) {

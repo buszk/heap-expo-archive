@@ -8,6 +8,8 @@ CXXFLAGS   ?= -O3 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 			 -Wno-variadic-macros -std=c++17
 
+LD_FLAGS   += -rdynamic
+
 RTFLAGS     = -flto -Iinclude
 
 MTFLAG      = -DMULTITHREADING
@@ -59,7 +61,9 @@ malloc-rt-64.o: malloc-rt.o.cpp
 
 test_build: $(PROGS)
 	./heap-expo-clang ./test-instr.c -o test-instr
+	./heap-expo-clang -O3 ./test-instr.c -o test-instr
 	./heap-expo-clang++ ./test-instr-cxx.cpp -o test-instr-cxx
+	./heap-expo-clang++ -O3 ./test-instr-cxx.cpp -o test-instr-cxx
 
 clean:
 	rm -f $(PROGS) ./test-instr ./test-instr-cxx ./heap-expo-clang++

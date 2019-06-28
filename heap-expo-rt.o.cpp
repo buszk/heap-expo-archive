@@ -131,8 +131,8 @@ void __attribute__((constructor (-1))) init_rt(void) {
 
 void __attribute__((destructor (65535))) fini_rt(void) {
     print_heap();
-    __free(ptr_record);
-    __free(memory_objects);
+    //__free(ptr_record);
+    //__free(memory_objects);
 }
 
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
@@ -152,7 +152,7 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
     }
 }
 
-inline void dealloc_hook_(uintptr_t ptr) {
+inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
 
     auto moit = memory_objects->find(ptr);
     if (moit == memory_objects->end()) {
@@ -191,10 +191,11 @@ inline void dealloc_hook_(uintptr_t ptr) {
             }
 
         }
+        if (invalidate)
 #if __x86_64__
-        *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
+            *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
 #else
-        *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
+            *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
 #endif
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
         it->second.invalid = true;
@@ -234,7 +235,7 @@ EXT_C void dealloc_hook(char* ptr_) {
     if (ptr) {
         LOCK(obj_mutex);
         LOCK(ptr_mutex);
-        dealloc_hook_(ptr);
+        dealloc_hook_(ptr, true);
         UNLOCK(ptr_mutex);
         UNLOCK(obj_mutex);
     }
@@ -248,19 +249,19 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
      * Case 2: work as dealloc (sometimes this is the case)
      * Case 3: Alloc, Copy ptrs to new home, Dealloc
      */
+    bool inval_in_ptrs = true;
     if (!he_initialized) return;
-    LOCK(obj_mutex);
-    LOCK(ptr_mutex);
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
     int offset = newptr - oldptr;
     PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
+    LOCK(obj_mutex);
     if (offset == 0) {
         memory_objects->at(newptr).size = newsize;
-        UNLOCK(ptr_mutex);
         UNLOCK(obj_mutex);
         return;
     }
+    LOCK(ptr_mutex);
     
     if (newptr)
         alloc_hook_(newptr, newsize);
@@ -308,9 +309,11 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
 
         }
         memory_objects->at(oldptr).out_edges.clear();
+        if (memory_objects->at(oldptr).in_edges.size() == 1)
+            inval_in_ptrs = false;
     }
     if (oldptr)
-        dealloc_hook_(oldptr);
+        dealloc_hook_(oldptr, inval_in_ptrs);
 
     UNLOCK(ptr_mutex);
     UNLOCK(obj_mutex);
