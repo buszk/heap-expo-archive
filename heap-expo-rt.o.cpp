@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 
+#define UNW_LOCAL_ONLY
 #if __x86_64__
 #include <libunwind.h>
 #else
@@ -135,9 +136,29 @@ void __attribute__((destructor (65535))) fini_rt(void) {
     //__free(memory_objects);
 }
 
+inline uint32_t get_signature() {
+    int cnt = -1;
+    int size = 4;
+    //void *array[4] = {0};
+    uint32_t sig = 0;
+    unw_cursor_t cursor;
+    unw_context_t uc;
+    unw_word_t ip, sp;
+    unw_getcontext(&uc);
+    unw_init_local(&cursor, &uc);
+    while (unw_step(&cursor) > 0 && cnt < size) {
+        unw_get_reg(&cursor, UNW_REG_IP, &ip);
+        if (++cnt >= 0) {
+            //array[cnt] = (void*)ip;
+            sig ^= ((uintptr_t)ip & 0xffff) << (cnt%4)*16;
+        }
+    }
+    return sig;
+}
+
 inline void alloc_hook_(uintptr_t ptr, size_t size) {
     /* Add heap object to memory_objects. Simple */
-    memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP)));
+    memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP, get_signature())));
 }
 
 /* XXX: unwind stack */
@@ -155,9 +176,12 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
 inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
 
     auto moit = memory_objects->find(ptr);
+
+    /* Not very likely but ptr may be allocated by other libraries */
     if (moit == memory_objects->end()) {
         return;
     }
+    PRINTF("[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
     
     /* Invalidate ptrs that point to this heap object */
     SLOCK(moit->second.in_mutex);

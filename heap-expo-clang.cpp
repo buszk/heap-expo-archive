@@ -38,6 +38,9 @@ int main(int argc, char** argv) {
     params.push_back("-Xclang");
     params.push_back(obj_path + "/LLVMHeapExpo.so");
 
+    /* Keep frame pointer for unwind */
+    params.push_back("-fno-omit-frame-pointer");
+
 
     if (argc == 1 && !strcmp(argv[1], "-v")) maybe_linking = false;
 
@@ -70,6 +73,7 @@ int main(int argc, char** argv) {
     if (maybe_linking) {
         params.push_back("-flto");
         params.push_back("-lpthread");
+        params.push_back("-lunwind");
 
         if (x_set) {
             params.push_back("-x");

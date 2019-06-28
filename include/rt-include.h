@@ -90,6 +90,7 @@ static const char* getTypeString(int typeVal) {
 struct object_info_t {
     size_t                      size      ;
     memory_type_e               type      ;
+    uint32_t                    signature ;
     he_unordered_set<uintptr_t> in_edges  ;
     he_unordered_set<uintptr_t> out_edges ;
 #ifdef MULTITHREADING
@@ -100,6 +101,7 @@ struct object_info_t {
     object_info_t () {
         size = 0;
         type = UNKNOWN;
+        signature = 0;
         in_edges = {};
         out_edges = {};
     }
@@ -107,13 +109,24 @@ struct object_info_t {
     object_info_t (size_t s) {
         size = s;
         type = UNKNOWN;
+        signature = 0;
         in_edges = {};
         out_edges = {};
     }
 
+    /* For global_hook */
     object_info_t (size_t s, memory_type_e t) {
         size = s;
         type = t;
+        in_edges = {};
+        out_edges = {};
+    }
+
+    /* For alloc_hook */
+    object_info_t (size_t s, memory_type_e t, uint32_t sig) {
+        size = s;
+        type = t;
+        signature = sig;
         in_edges = {};
         out_edges = {};
     }
@@ -121,6 +134,7 @@ struct object_info_t {
     object_info_t (const object_info_t &copy) {
         size = copy.size;
         type = copy.type;
+        signature = copy.signature;
     }
 };
 
