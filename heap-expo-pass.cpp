@@ -245,7 +245,7 @@ struct HeapExpo : public ModulePass {
 
             size_t elementSize = DL->getTypeAllocSize(G->getType()->getPointerElementType());
             std::vector<Value*> Args;
-            Value *ptr = Builder.CreatePtrToInt(G, Int8PtrTy(M));
+            Value *ptr = Builder.CreatePointerCast(G, Int8PtrTy(M));
             Args.push_back(ptr);
             Value *size = ConstantInt::get(SizeTy(M), elementSize);
             Args.push_back(size);
