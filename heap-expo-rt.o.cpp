@@ -126,6 +126,7 @@ void __attribute__((constructor (-1))) init_rt(void) {
     new(memory_objects) he_map<uintptr_t, struct object_info_t>;
     ptr_record = (he_unordered_map<uintptr_t, struct pointer_info_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, struct pointer_info_t>));
     new(ptr_record) he_unordered_map<uintptr_t, struct pointer_info_t>;
+    ptr_record->reserve(1024);
     PRINTF("STL objects initialized\n");
     he_initialized = true;
 }
@@ -143,7 +144,7 @@ inline uint32_t get_signature() {
     uint32_t sig = 0;
     unw_cursor_t cursor;
     unw_context_t uc;
-    unw_word_t ip, sp;
+    unw_word_t ip;
     unw_getcontext(&uc);
     unw_init_local(&cursor, &uc);
     while (unw_step(&cursor) > 0 && cnt < size) {
@@ -388,7 +389,7 @@ inline void deregptr_src(he_unordered_map<uintptr_t, struct pointer_info_t>::ite
     }
 }
 
-inline void deregptr_(uintptr_t ptr_loc) {
+inline bool deregptr_(uintptr_t ptr_loc, bool keep) {
 
     SLOCK(ptr_mutex);
     auto it = ptr_record->find(ptr_loc);
@@ -396,12 +397,16 @@ inline void deregptr_(uintptr_t ptr_loc) {
         deregptr_dst(it);
         deregptr_src(it);
         SUNLOCK(ptr_mutex);
-        LOCK(ptr_mutex);
-        ptr_record->erase(ptr_loc);
-        UNLOCK(ptr_mutex);
+        if (!keep) {
+            LOCK(ptr_mutex);
+            ptr_record->erase(ptr_loc);
+            UNLOCK(ptr_mutex);
+            return 0;
+        }
+        return 1;
     }
-    else 
-        SUNLOCK(ptr_mutex);
+    SUNLOCK(ptr_mutex);
+    return 0;
 
 }
 
@@ -419,9 +424,14 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
     }
 
     SLOCK(obj_mutex);
-    deregptr_(ptr_loc);
+    bool kept = deregptr_(ptr_loc, true);
 
-    if (ptr_val < 4086) {
+    if (ptr_val < 4096) {
+        if (kept) {
+            LOCK(ptr_mutex);
+            ptr_record->erase(ptr_loc);
+            UNLOCK(ptr_mutex);
+        }
         SUNLOCK(obj_mutex);
         return;
     }
@@ -436,10 +446,26 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
         obj_info->in_edges.insert(ptr_loc);
         UNLOCK(obj_info->in_mutex);
         ptr_obj_info->out_edges.insert(ptr_loc);
-        LOCK(ptr_mutex);
-        ptr_record->insert(make_pair<>(ptr_loc, pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
-                                                ptr_obj_info, obj_info, id)));
-        UNLOCK(ptr_mutex);
+        pointer_info_t pit = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
+                                            ptr_obj_info, obj_info, id);
+        if (!kept) {
+            LOCK(ptr_mutex);
+            ptr_record->insert(make_pair<>(ptr_loc, pit));
+            UNLOCK(ptr_mutex);
+        }
+        else {
+            SLOCK(ptr_mutex);
+            ptr_record->at(ptr_loc) = pit;
+            SUNLOCK(ptr_mutex);
+        }
+
+    }
+    else {
+        if (kept) {
+            LOCK(ptr_mutex);
+            ptr_record->erase(ptr_loc);
+            UNLOCK(ptr_mutex);
+        }
     }
     SUNLOCK(obj_mutex);
 }
@@ -449,7 +475,7 @@ EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
 
     PRINTF("[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);
     SLOCK(obj_mutex);
-    deregptr_(ptr_loc);
+    deregptr_(ptr_loc, false);
     SUNLOCK(obj_mutex);
 
 }

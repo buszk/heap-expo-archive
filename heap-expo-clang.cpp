@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
 #endif
         params.push_back("-lpthread");
         params.push_back("-lunwind");
+        params.push_back("-lm");
 
         if (x_set) {
             params.push_back("-x");
