@@ -71,7 +71,9 @@ int main(int argc, char** argv) {
      * This has to go before the src file so that LLVM Pass can see rt functions
      */
     if (maybe_linking) {
+#ifdef LTO
         params.push_back("-flto");
+#endif
         params.push_back("-lpthread");
         params.push_back("-lunwind");
 
@@ -122,11 +124,15 @@ int main(int argc, char** argv) {
     _argv = argv;
     while (--_argc) {
         std::string cur(*(++_argv)); 
+#ifdef LTO
         /* Sanitize optimization level for lto */
         if (maybe_linking && (cur == "-Os"|| cur == "-Oz"))
             params.push_back("-O2");
         else 
             params.push_back(cur);
+#else 
+        params.push_back(cur);
+#endif
     }
 
     cc_params = new char*[params.size() + 2];

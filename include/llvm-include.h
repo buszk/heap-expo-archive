@@ -7,7 +7,7 @@
 #define VoidTy(x)       Type::getVoidTy(x->getContext())
 #define Int1Ty(x)       Type::getInt1Ty(x->getContext())
 #define Int8Ty(x)       Type::getInt8Ty(x->getContext())
-#define Int16Ty(x)      Type::getInt1rTy(x->getContext())
+#define Int16Ty(x)      Type::getInt16Ty(x->getContext())
 #define Int32Ty(x)      Type::getInt32Ty(x->getContext())
 #define Int64Ty(x)      Type::getInt64Ty(x->getContext())
 #define IntNTy(x, n)    Type::getIntNTy(x->getContext(), n)

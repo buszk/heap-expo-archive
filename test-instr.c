@@ -27,8 +27,6 @@ size_t capacity = 0;
 char* history[5] = {0};
 int history_ind = 0;
 
-void print_heap();
-
 int main(int argc, char** argv) {
 
     char buf[16] = {0};
@@ -49,7 +47,6 @@ int main(int argc, char** argv) {
         strings[size++] = tmp;
         history[history_ind++%5] = tmp;
     }
-    print_heap();
     printf("Here are your strings:\n");
     for (int i = 0; strings && strings[i] && i < size; i++) {
         printf("%s\n", strings[i]);

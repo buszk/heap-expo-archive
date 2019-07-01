@@ -28,8 +28,6 @@ vector<string> strings;
 string* history[5] = {0};
 int history_ind = 0;
 
-extern "C" void print_heap();
-
 int main(int argc, char** argv) {
 
     string buf;
@@ -45,7 +43,6 @@ int main(int argc, char** argv) {
         strings.push_back(buf);
         history[history_ind++%5] = &strings[strings.size()-1];
     }
-    print_heap();
     cout << "Here are your strings:\n";
     for (string s : strings) {
         cout << s << "\n";

@@ -140,7 +140,7 @@ static bool isStackPtr(Value *V) {
     }
     return false;
 }
-
+/*
 static bool isConstantGlobalPtr(Value *V) {
     if (!isa<User>(V))
         return false;
@@ -155,76 +155,27 @@ static bool isConstantGlobalPtr(Value *V) {
     }
     return false;
 }
-
-struct HeapExpo : public ModulePass {
+*/
+struct HeapExpoGlobalTracker : public ModulePass {
     static char ID;
 
     Function *GlobalHookFunc;
     const DataLayout *DL;
     Module *M;
     
-    Function *regptr, *deregptr;
-    Function *func;
-    size_t store_instr_cnt = 0;
-    size_t stack_store_instr_cnt = 0;
-    size_t store_const_global_cnt = 0;
-        
-    bool initialized = true;
+    bool initialized;
 
-    HeapExpo() : ModulePass(ID) {  }
-
-
-    void instrDereg(StoreInst *SI) {
-
-        DebugLoc DLoc = SI->getDebugLoc();
-        if (!DLoc)
-            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
-        
-        uint32_t cur_call = rand() & 0xffffffff;
-        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
-
-        std::vector <Value*> Args;
-        CastInst *cast_loc =
-            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
-        cast_loc->insertBefore(SI);
-        cast_loc->setDebugLoc(DLoc);
-        Args.push_back((Value*)cast_loc);
-        Args.push_back((Value*)CurCall);
-        CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
-        deregptr_call->insertBefore(SI);
-        deregptr_call->setDebugLoc(DLoc);
-    }
-
-    void instrReg(StoreInst *SI) {
-
-        DebugLoc DLoc = SI->getDebugLoc();
-        if (!DLoc)
-            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
-       
-        std::vector <Value*> Args;
-
-        uint32_t cur_call = rand() & 0xffffffff;
-        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
-
-        CastInst *cast_loc =
-            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
-        cast_loc->insertBefore(SI);
-        cast_loc->setDebugLoc(DLoc);
-        Args.push_back((Value*)cast_loc);
-        CastInst *cast_val =
-            CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
-        cast_val->insertBefore(SI);
-        cast_val->setDebugLoc(DLoc);
-        Args.push_back((Value*)cast_val);
-        Args.push_back((Value*)CurCall);
-        CallInst *regptr_call = CallInst::Create(regptr, Args, "");
-        regptr_call->insertBefore(SI);
-        regptr_call->setDebugLoc(DLoc);
-    }
+    HeapExpoGlobalTracker() : ModulePass(ID) { initialized = false; }
 
     virtual bool runOnModule(Module &Mod) {
         size_t global_instr_cnt = 0;
-        M = &Mod;
+        
+        Module *M = &Mod;
+        DL = &(M->getDataLayout());
+        if (!DL)
+            LOG(LVL_ERROR) << "Data Layout required\n";
+
+        GlobalHookFunc = (Function*)M->getOrInsertFunction("global_hook", VoidTy(M), Int8PtrTy(M), SizeTy(M));
         
         doInitialization(Mod);
 
@@ -266,74 +217,142 @@ struct HeapExpo : public ModulePass {
         
         Builder.CreateRet(NULL);
         
-
-        for (auto &F : *M) {
-            LOG(LVL_DEBUG) << "HeapExpo: ";
-            LOG(LVL_DEBUG).write_escaped(demangleName(F.getName())) << '\n';
-            M = F.getParent();
-            func = &F;
-            for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
-                Instruction *I = &*i;
-                if (isa<StoreInst> (I)) {
-                    LOG(LVL_DEBUG) << "Store instruction: " << *I << "\n";
-                    StoreInst *SI = dyn_cast<StoreInst> (I);
-                    if (SI->getValueOperand()->getType()->isPointerTy()) {
-                        if (isa<GlobalVariable>(SI->getPointerOperand()))
-                            LOG(LVL_DEBUG) << "Storing to global var\n" ;
-                        if (isa<ConstantPointerNull>(SI->getValueOperand())) {
-                            LOG(LVL_DEBUG) << "Value is a nullptr\n";
-                                
-                            instrDereg(SI);
-                            
-                            store_instr_cnt ++;
-
-                        } else {
-                            LOG(LVL_DEBUG) << "Value is a ptr\n";
-                            
-                            /* Don't instr if storing to stack */
-                            if (isStackPtr(SI->getPointerOperand())) {
-                                stack_store_instr_cnt++;
-                                continue;
-                            }
-
-                            //if (isConstantGlobalPtr(SI->getValueOperand())) 
-                            if (isa<Constant>(SI->getValueOperand())) {
-                                instrDereg(SI);
-                                store_const_global_cnt++;
-                                continue;
-                            }
-
-                            instrReg(SI);
-
-                            store_instr_cnt ++;
-
-                        }
-
-                    }
-                }
-            }
-        }
-
         std::ostringstream ss;
         ss << "Instrumented tracking to " << global_instr_cnt << 
             " global variables\n";
-        ss << "Instrumented tracking to " << store_instr_cnt << 
-            " all store instructions\n";
-        ss << "Instrumented tracking to " << stack_store_instr_cnt << 
-            " stack store instructions\n";
-        ss << "Instrumented tracking to " << store_const_global_cnt << 
-            " store const global instructions\n";
         LOG(LVL_INFO) << ss.str();
         return false;
     }
 
-    virtual bool doInitialization(Module &Mod) { 
-        M = &Mod;
-        DL = &(M->getDataLayout());
-        if (!DL)
-            LOG(LVL_ERROR) << "Data Layout required\n";
+};
 
-        GlobalHookFunc = (Function*)M->getOrInsertFunction("global_hook", VoidTy(M), Int8PtrTy(M), SizeTy(M));
+struct HeapExpoFuncTracker : public FunctionPass  {
+    static char ID;
+    bool initialized;
+    Module *M;
+    Function *regptr, *deregptr;
+    Function *func;
+    size_t store_instr_cnt = 0;
+    size_t stack_store_instr_cnt = 0;
+    size_t store_const_global_cnt = 0;
+
+    HeapExpoFuncTracker() : FunctionPass(ID) {
+        initialized = false;
+    }
+    
+    void instrDereg(StoreInst *SI) {
+
+        DebugLoc DLoc = SI->getDebugLoc();
+        if (!DLoc)
+            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+        
+        uint32_t cur_call = rand() & 0xffffffff;
+        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
+
+        std::vector <Value*> Args;
+        CastInst *cast_loc =
+            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
+        cast_loc->insertBefore(SI);
+        cast_loc->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_loc);
+        Args.push_back((Value*)CurCall);
+
+        LOG(LVL_DEBUG) << "CurCall Type: " << *CurCall->getType() << '\n';
+        LOG(LVL_DEBUG) << "Cast Loc Type: " << *cast_loc->getType() << '\n';
+        LOG(LVL_DEBUG) << "Func Type: " << *deregptr << '\n';
+        
+        CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
+        deregptr_call->insertBefore(SI);
+        deregptr_call->setDebugLoc(DLoc);
+    }
+
+    void instrReg(StoreInst *SI) {
+
+        DebugLoc DLoc = SI->getDebugLoc();
+        if (!DLoc)
+            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+       
+        std::vector <Value*> Args;
+
+        uint32_t cur_call = rand() & 0xffffffff;
+        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
+
+        CastInst *cast_loc =
+            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
+        cast_loc->insertBefore(SI);
+        cast_loc->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_loc);
+        CastInst *cast_val =
+            CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
+        cast_val->insertBefore(SI);
+        cast_val->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_val);
+        Args.push_back((Value*)CurCall);
+        CallInst *regptr_call = CallInst::Create(regptr, Args, "");
+        regptr_call->insertBefore(SI);
+        regptr_call->setDebugLoc(DLoc);
+    }
+
+    virtual bool runOnFunction(Function &F) {
+
+        LOG(LVL_DEBUG) << "HeapExpo: ";
+        LOG(LVL_DEBUG).write_escaped(demangleName(F.getName())) << '\n';
+        
+        if (M != F.getParent()) {
+            M = F.getParent();
+            initialized = false;
+        }
+
+        if (!initialized) 
+            initialize(M);
+
+        func = &F;
+        for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
+            Instruction *I = &*i;
+            if (isa<StoreInst> (I)) {
+                LOG(LVL_DEBUG) << "Store instruction: " << *I << "\n";
+                StoreInst *SI = dyn_cast<StoreInst> (I);
+                if (SI->getValueOperand()->getType()->isPointerTy()) {
+                    if (isa<GlobalVariable>(SI->getPointerOperand()))
+                        LOG(LVL_DEBUG) << "Storing to global var\n" ;
+                    if (isa<ConstantPointerNull>(SI->getValueOperand())) {
+                        LOG(LVL_DEBUG) << "Value is a nullptr\n";
+                            
+                        instrDereg(SI);
+                        
+                        store_instr_cnt ++;
+
+                    } else {
+                        LOG(LVL_DEBUG) << "Value is a ptr\n";
+                        
+                        /* Don't instr if storing to stack */
+                        if (isStackPtr(SI->getPointerOperand())) {
+                            stack_store_instr_cnt++;
+                            continue;
+                        }
+
+                        //if (isConstantGlobalPtr(SI->getValueOperand())) 
+                        if (isa<Constant>(SI->getValueOperand())) {
+                            instrDereg(SI);
+                            store_const_global_cnt++;
+                            continue;
+                        }
+
+                        instrReg(SI);
+
+                        store_instr_cnt ++;
+
+                    }
+
+                }
+            }
+        }
+        return false;
+
+    }
+    
+    bool initialize(Module *M) { 
+
         Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
         deregptr = cast<Function>(deregptr_def);
         deregptr->setCallingConv(CallingConv::C);
@@ -348,21 +367,42 @@ struct HeapExpo : public ModulePass {
         return false;
     }
 
+    virtual bool doFinalization(Module &Mod) {
+        std::ostringstream ss;
+        ss << "Instrumented tracking to " << store_instr_cnt << 
+            " all store instructions\n";
+        ss << "Instrumented tracking to " << stack_store_instr_cnt << 
+            " stack store instructions\n";
+        ss << "Instrumented tracking to " << store_const_global_cnt << 
+            " store const global instructions\n";
+        LOG(LVL_INFO) << ss.str();
+        return false;
+    }
+
 };
 }
 
-char HeapExpo::ID = 0;
-static RegisterPass<HeapExpo> X("HeapExpo", "HeapExpo Func Pass",
+
+
+
+
+char HeapExpoGlobalTracker::ID = 1;
+char HeapExpoFuncTracker::ID = 2;
+static RegisterPass<HeapExpoGlobalTracker> X("HeapExpoGlobal", "HeapExpo Global Pass",
+                             false /* Only looks at CFG */,
+                             false /* Analysis Pass */);
+static RegisterPass<HeapExpoFuncTracker> Y("HeapExpoFunc", "HeapExpo Function Pass",
                              false /* Only looks at CFG */,
                              false /* Analysis Pass */);
 
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
-    PM.add(new HeapExpo());
+    PM.add(new HeapExpoFuncTracker());
+    PM.add(new HeapExpoGlobalTracker());
 }
 
 static RegisterStandardPasses
-    RegisterMyPass(PassManagerBuilder::EP_ScalarOptimizerLate,
+    RegisterMyPass(PassManagerBuilder::EP_OptimizerLast,
             registerMyPass);
 
 static RegisterStandardPasses
