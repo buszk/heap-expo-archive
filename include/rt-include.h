@@ -145,25 +145,27 @@ struct pointer_info_t {
     bool                  invalid  ;
     struct object_info_t *src_info ,
                          *dst_info ;
+    uint32_t              id       ;
 
     pointer_info_t () {
-        value = src_obj = dst_obj = invalid = 0;
+        value = src_obj = dst_obj = invalid = id = 0;
         src_info = dst_info = NULL;
     }
 
     pointer_info_t (uintptr_t v) {
         value = v;
-        src_obj = dst_obj = invalid = 0;
+        src_obj = dst_obj = invalid = id = 0;
         src_info = dst_info = NULL;
     }
 
     pointer_info_t (uintptr_t v, uintptr_t s, uintptr_t d,
-            struct object_info_t *si, struct object_info_t *di) {
+            struct object_info_t *si, struct object_info_t *di, uint32_t i) {
         value = v;
         src_obj = s;
         dst_obj = d;
         src_info = si;
         dst_info = di;
+        id = i;
         invalid = 0;
     } 
 
@@ -174,7 +176,7 @@ struct pointer_info_t {
         src_info = copy.src_info;
         dst_info = copy.dst_info;
         invalid = copy.invalid;
-
+        id = copy.id;
     }
 
 };

@@ -156,9 +156,9 @@ inline uint32_t get_signature() {
     return sig;
 }
 
-inline void alloc_hook_(uintptr_t ptr, size_t size) {
+inline void alloc_hook_(uintptr_t ptr, size_t size, uint32_t sig) {
     /* Add heap object to memory_objects. Simple */
-    memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP, get_signature())));
+    memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP, sig)));
 }
 
 /* XXX: unwind stack */
@@ -167,8 +167,9 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
     if (ptr) {
+        uint32_t sig = get_signature();
         LOCK(obj_mutex);
-        alloc_hook_(ptr, size);
+        alloc_hook_(ptr, size, sig);
         UNLOCK(obj_mutex);
     }
 }
@@ -278,6 +279,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
     int offset = newptr - oldptr;
+    uint32_t sig = get_signature();
     PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     LOCK(obj_mutex);
     if (offset == 0) {
@@ -288,7 +290,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     LOCK(ptr_mutex);
     
     if (newptr)
-        alloc_hook_(newptr, newsize);
+        alloc_hook_(newptr, newsize, sig);
 
     //size_t oldsize = memory_objects[oldptr].size;
 
@@ -403,7 +405,7 @@ inline void deregptr_(uintptr_t ptr_loc) {
 
 }
 
-EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
+EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
     uintptr_t ptr_val= (uintptr_t)ptr_val_;
     
@@ -436,13 +438,13 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_) {
         ptr_obj_info->out_edges.insert(ptr_loc);
         LOCK(ptr_mutex);
         ptr_record->insert(make_pair<>(ptr_loc, pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
-                                                ptr_obj_info, obj_info)));
+                                                ptr_obj_info, obj_info, id)));
         UNLOCK(ptr_mutex);
     }
     SUNLOCK(obj_mutex);
 }
 
-EXT_C void deregptr(char* ptr_loc_) {
+EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
 
     PRINTF("[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);

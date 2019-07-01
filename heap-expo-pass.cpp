@@ -13,6 +13,8 @@
 #include <exception>
 #include <cxxabi.h>
 #include <sstream>
+#include <time.h>
+#include <cstdlib>
 
 #include <vector>
 
@@ -177,6 +179,9 @@ struct HeapExpo : public ModulePass {
         DebugLoc DLoc = SI->getDebugLoc();
         if (!DLoc)
             DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+        
+        uint32_t cur_call = rand() & 0xffffffff;
+        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
 
         std::vector <Value*> Args;
         CastInst *cast_loc =
@@ -184,6 +189,7 @@ struct HeapExpo : public ModulePass {
         cast_loc->insertBefore(SI);
         cast_loc->setDebugLoc(DLoc);
         Args.push_back((Value*)cast_loc);
+        Args.push_back((Value*)CurCall);
         CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
         deregptr_call->insertBefore(SI);
         deregptr_call->setDebugLoc(DLoc);
@@ -196,6 +202,10 @@ struct HeapExpo : public ModulePass {
             DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
        
         std::vector <Value*> Args;
+
+        uint32_t cur_call = rand() & 0xffffffff;
+        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
+
         CastInst *cast_loc =
             CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
         cast_loc->insertBefore(SI);
@@ -206,6 +216,7 @@ struct HeapExpo : public ModulePass {
         cast_val->insertBefore(SI);
         cast_val->setDebugLoc(DLoc);
         Args.push_back((Value*)cast_val);
+        Args.push_back((Value*)CurCall);
         CallInst *regptr_call = CallInst::Create(regptr, Args, "");
         regptr_call->insertBefore(SI);
         regptr_call->setDebugLoc(DLoc);
@@ -323,13 +334,15 @@ struct HeapExpo : public ModulePass {
             LOG(LVL_ERROR) << "Data Layout required\n";
 
         GlobalHookFunc = (Function*)M->getOrInsertFunction("global_hook", VoidTy(M), Int8PtrTy(M), SizeTy(M));
-        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M));
+        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
         deregptr = cast<Function>(deregptr_def);
         deregptr->setCallingConv(CallingConv::C);
         
-        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M));
+        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
         regptr = cast<Function>(regptr_def);
         regptr->setCallingConv(CallingConv::C);
+
+        srand(time(NULL));
         
         initialized = true;
         return false;
@@ -349,7 +362,7 @@ static void registerMyPass(const PassManagerBuilder &,
 }
 
 static RegisterStandardPasses
-    RegisterMyPass(PassManagerBuilder::EP_OptimizerLast,
+    RegisterMyPass(PassManagerBuilder::EP_ScalarOptimizerLate,
             registerMyPass);
 
 static RegisterStandardPasses
