@@ -17,12 +17,12 @@ RTFLAGS     = $(LTOFLAG) -Iinclude
 
 MTFLAG      = -DMULTITHREADING
 
-INST_LFL    = $(LDFLAGS) heap-expo-rt.o malloc-rt.o -lstdc++ # force c++ linker
+INST_LFL    = $(LDFLAGS) heap-expo-rt.o -lstdc++ # force c++ linker
 
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS) -Iinclude
 CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
 
-PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o malloc-rt.o malloc-rt-32.o malloc-rt-64.o
+PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o 
 
 PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so $(LTOFLAG)
 
@@ -50,17 +50,6 @@ heap-expo-rt-64.o: heap-expo-rt.o.cpp
 	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -m64 -fPIC -c $< -o $(@:.o=-mt.o) 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
-
-malloc-rt.o: malloc-rt.o.cpp
-	$(CXX) $(CXXFLAGS) $(RTFLAGS) -fPIC -c $< -o $@
-
-malloc-rt-32.o: malloc-rt.o.cpp
-	@printf "[*] Building 32-bit variant of the malloc runtime (-m32)... "
-	@$(CXX) $(CXXFLAGS) $(RTFLAGS) -m32 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
-
-malloc-rt-64.o: malloc-rt.o.cpp
-	@printf "[*] Building 64-bit variant of the malloc runtime (-m64)... "
-	@$(CXX) $(CXXFLAGS) $(RTFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
 test_build: $(PROGS)
 	./heap-expo-clang ./test-instr.c -o test-instr

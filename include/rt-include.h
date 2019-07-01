@@ -1,3 +1,5 @@
+#ifndef RT_INCLUDE_H
+#define RT_INCLUDE_H
 #include <new>  // std::bad_alloc()
 #include <vector>
 #include <set>
@@ -180,3 +182,4 @@ struct pointer_info_t {
     }
 
 };
+#endif

@@ -15,6 +15,7 @@
 #endif
 
 #include "rt-include.h"
+#include "malloc-rt.h"
 
 
 /*
