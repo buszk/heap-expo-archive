@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <string.h>
 
 #define UNW_LOCAL_ONLY
 #if __x86_64__
@@ -23,7 +24,7 @@
  * LVL1: Debug version, need to set env HEAP_EXPO_DEBUG
  * LVL2: Debug version
  */
-#define DEBUG_LVL 1
+#define DEBUG_LVL 0
 #if DEBUG_LVL >= 1
 #define PRINTF(...) __printf(__VA_ARGS__)
 #else
@@ -44,6 +45,15 @@ using namespace std;
 #define SLOCK(mtx)
 #define SUNLOCK(mtx)
 #endif
+
+#define AFL
+#ifdef AFL
+#include <fstream>
+#include <sys/shm.h>
+#define HE_MAP_SIZE (1<<13)
+char  __heap_expo_initial[HE_MAP_SIZE];
+char* __heap_expo_ptr = __heap_expo_initial;
+#endif 
 
 
 he_map<uintptr_t, struct object_info_t> *memory_objects;
@@ -84,7 +94,6 @@ EXT_C void msg(const char* str) {
     __printf(str);
 #endif
 }
-
 void print_memory_objects() {
     SLOCK(obj_mutex);
     PRINTF("Objects List:\n");
@@ -109,9 +118,42 @@ void print_edges() {
 }
 
 EXT_C void print_heap() {
+#if DEBUG_LVL > 1
     print_memory_objects();
     print_edges();
+#endif
 }
+
+#ifdef AFL
+inline void print_map() {
+#if DEBUG_LVL >1
+    ofstream fout;
+    PRINTF("Map printing\n");
+    fout.open("map", ios::binary|ios::out);
+
+    fout.write(__heap_expo_ptr, HE_MAP_SIZE);
+    fout.close();
+    PRINTF("Map printed\n");
+#endif
+}
+
+void __heap_expo_shm() {
+
+    char *id_str = getenv("HEAP_EXPO_SHM");
+
+    if (id_str) {
+        uint32_t shm_id = atoi(id_str);
+
+        __heap_expo_ptr = (char*)shmat(shm_id, NULL, 0);
+
+        if (__heap_expo_ptr == (void*)-1) exit(1);
+
+    }
+    
+    memset(__heap_expo_ptr, 0x0, HE_MAP_SIZE);
+    __heap_expo_ptr[0] = 1;
+}
+#endif
 
 EXT_C void global_hook(char* addr, size_t size) {
     if (!he_initialized) return;
@@ -122,18 +164,26 @@ EXT_C void global_hook(char* addr, size_t size) {
     UNLOCK(obj_mutex);
 }
 
-void __attribute__((constructor (-1))) init_rt(void) {
+void __attribute__((constructor (101))) init_rt(void) {
     memory_objects = (he_map<uintptr_t, struct object_info_t>*)__malloc(sizeof(he_map<uintptr_t, struct object_info_t>));
     new(memory_objects) he_map<uintptr_t, struct object_info_t>;
     ptr_record = (he_unordered_map<uintptr_t, struct pointer_info_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, struct pointer_info_t>));
     new(ptr_record) he_unordered_map<uintptr_t, struct pointer_info_t>;
     ptr_record->reserve(1024);
     PRINTF("STL objects initialized\n");
+
+#ifdef AFL
+    __heap_expo_shm();
+#endif
+
     he_initialized = true;
 }
 
 void __attribute__((destructor (65535))) fini_rt(void) {
     print_heap();
+#ifdef AFL
+    print_map();
+#endif
     //__free(ptr_record);
     //__free(memory_objects);
 }
@@ -180,10 +230,16 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
 
     auto moit = memory_objects->find(ptr);
 
+
     /* Not very likely but ptr may be allocated by other libraries */
     if (moit == memory_objects->end()) {
         return;
     }
+#ifdef AFL
+    uint32_t sig = moit->second.signature ^ get_signature();
+    he_unordered_set<uintptr_t> unique_labels = {};
+#endif
+
     PRINTF("[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
     
     /* Invalidate ptrs that point to this heap object */
@@ -211,7 +267,6 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
                 PRINTF("Current value: %016lx\n", cur_val);
                 if (!src_obj_info->out_edges.erase(ptr_loc)) 
                     assert(false &&"smoit incongruence");
-
                 ptr_record->erase(it);
 
                 continue;
@@ -225,6 +280,11 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
             *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
 #endif
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
+
+#ifdef AFL
+        unique_labels.insert(it->second.id);
+#endif
+
         it->second.invalid = true;
     }
     SUNLOCK(moit->second.in_mutex);
@@ -252,6 +312,12 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
     moit->second.out_edges.clear();
 
     memory_objects->erase(moit);
+   
+#ifdef AFL
+    uint16_t offset = hash<uint32_t>()(sig) & 0x1fff;
+    PRINTF("[HeapExpo][bitmap]: offset:%04lx\n", offset);
+    __heap_expo_ptr[offset] |= (1 << unique_labels.size());
+#endif
 }
 
 /* XXX: unwind stack */

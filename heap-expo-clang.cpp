@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> params;
     bool maybe_linking   = true,
          x_set           = false,
-         multi_threading = false;;
+         multi_threading = false;
     int bit_mode = 0;
 
     if (argc < 2) {
@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
         if (cur == "-pthread" || cur == "-lpthread") 
             multi_threading = true;
     }
-
+    
     /* 
      * Add rt objects if involving linking 
      * This has to go before the src file so that LLVM Pass can see rt functions
@@ -96,8 +96,7 @@ int main(int argc, char** argv) {
 
             case 32:
                 params.push_back(obj_path + "/heap-expo-rt-32" + suffix);
-                if (access(params[params.size()-1].c_str(), R_OK) ||
-                    access(params[params.size()-2].c_str(), R_OK))  {
+                if (access(params[params.size()-1].c_str(), R_OK)) {
                     std::cerr << "-m32 is not supported by your compiler\n";
                     return 1;
                 }
@@ -105,8 +104,7 @@ int main(int argc, char** argv) {
 
             case 64:
                 params.push_back(obj_path + "/heap-expo-rt-64" + suffix);
-                if (access(params[params.size()-1].c_str(), R_OK) ||
-                    access(params[params.size()-2].c_str(), R_OK))  {
+                if (access(params[params.size()-1].c_str(), R_OK)) {
                     std::cerr << "-m64 is not supported by your compiler\n";
                     return 1;
                 }
@@ -153,10 +151,10 @@ int main(int argc, char** argv) {
     /*
     char** tmp = cc_params;
     while(tmp != NULL && *tmp != NULL) {
-        printf("%s ", *tmp);
+        fprintf(stderr, "%s ", *tmp);
         tmp++;
     }
-    printf("\n");
+    fprintf(stderr, "\n");
     */
 
     execvp(cc_params[0], cc_params);
