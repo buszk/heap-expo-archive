@@ -1,3 +1,4 @@
+#define AFL
 #include <cstdio>
 #include <utility>
 #include <map>
@@ -15,6 +16,9 @@
 #include <libunwind-x86.h>
 #endif
 
+#ifdef AFL
+#include "afl-include.h"
+#endif
 #include "rt-include.h"
 #include "malloc-rt.h"
 
@@ -46,11 +50,9 @@ using namespace std;
 #define SUNLOCK(mtx)
 #endif
 
-#define AFL
 #ifdef AFL
 #include <fstream>
 #include <sys/shm.h>
-#define HE_MAP_SIZE (1<<13)
 char  __heap_expo_initial[HE_MAP_SIZE];
 char* __heap_expo_ptr = __heap_expo_initial;
 #endif 
@@ -137,9 +139,26 @@ inline void print_map() {
 #endif
 }
 
+void print_remaining() {
+    he_unordered_set<int32_t> labels;
+    uint32_t sig;
+    uint16_t offset;
+    for (auto moit = memory_objects->begin(); moit != memory_objects->end(); moit++) {
+        sig = moit->second.signature;
+        for (uintptr_t p: moit->second.in_edges) {
+            labels.insert(ptr_record->at(p).id);
+        }
+        offset = hash<uint32_t>()(sig) & 0xfff + 0x1000;
+        PRINTF("[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
+        __heap_expo_ptr[offset] |= (1 << labels.size());
+        
+        labels.clear();
+    }
+}
+
 void __heap_expo_shm() {
 
-    char *id_str = getenv("HEAP_EXPO_SHM");
+    char *id_str = getenv(HE_SHM_ENV_VAR);
 
     if (id_str) {
         uint32_t shm_id = atoi(id_str);
@@ -183,6 +202,7 @@ void __attribute__((destructor (65535))) fini_rt(void) {
     print_heap();
 #ifdef AFL
     print_map();
+    print_remaining();
 #endif
     //__free(ptr_record);
     //__free(memory_objects);
@@ -236,8 +256,8 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
         return;
     }
 #ifdef AFL
-    uint32_t sig = moit->second.signature ^ get_signature();
-    he_unordered_set<uintptr_t> unique_labels = {};
+    uint32_t sig = moit->second.signature;
+    he_unordered_set<uintptr_t> labels = {};
 #endif
 
     PRINTF("[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
@@ -282,7 +302,7 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
 
 #ifdef AFL
-        unique_labels.insert(it->second.id);
+        labels.insert(it->second.id);
 #endif
 
         it->second.invalid = true;
@@ -314,9 +334,9 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
     memory_objects->erase(moit);
    
 #ifdef AFL
-    uint16_t offset = hash<uint32_t>()(sig) & 0x1fff;
-    PRINTF("[HeapExpo][bitmap]: offset:%04lx\n", offset);
-    __heap_expo_ptr[offset] |= (1 << unique_labels.size());
+    uint16_t offset = hash<uint32_t>()(sig) & 0xfff;
+    PRINTF("[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
+    __heap_expo_ptr[offset] |= (1 << labels.size());
 #endif
 }
 
