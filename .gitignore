@@ -9,3 +9,4 @@ test-instr
 test-instr-cxx
 heap-expo-clang
 heap-expo-clang++
+afl-heap-expo-map

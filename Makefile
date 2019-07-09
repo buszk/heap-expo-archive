@@ -22,7 +22,7 @@ INST_LFL    = $(LDFLAGS) heap-expo-rt.o -lstdc++ # force c++ linker
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS) -Iinclude
 CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
 
-PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o 
+PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o afl-heap-expo-map
 
 PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so $(LTOFLAG)
 
@@ -34,6 +34,9 @@ heap-expo-clang: heap-expo-clang.cpp
 
 LLVMHeapExpo.so: heap-expo-pass.cpp
 	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
+
+afl-heap-expo-map: afl-heap-expo-map.cpp
+	$(CXX) $(CXXFLAGS) $< -o $@ -Iinclude
 
 heap-expo-rt.o: heap-expo-rt.o.cpp
 	$(CXX) $(CXXFLAGS) $(RTFLAGS) -fPIC -c $< -o $@
