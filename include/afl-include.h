@@ -1,6 +1,8 @@
+#define MAP_SIZE (1<<16)
 #define HE_MAP_SIZE (1<<13)
 
 #define HE_SHM_ENV_VAR "HEAP_EXPO_SHM"
+#define SHM_ENV_VAR "__AFL_SHM_ID"
 
 #define MEM_BARRIER() \
     asm volatile("" ::: "memory")

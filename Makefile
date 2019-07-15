@@ -65,7 +65,7 @@ test_time: $(PROGS)
 	clang ./test-instr.c -o /dev/null -O3; \
 	b=$$(($$(date +%s%N)-d)); \
 	d=$$(date +%s%N); \
-	./heap-expo-clang ./test-instr.c -o /dev/null -O3; \
+	HEAP_EXPO_CC=/home/zekun/repo/afl-2.52b/afl-clang-fast ./heap-expo-clang ./test-instr.c -o /dev/null -O3; \
 	t=$$(($$(date +%s%N)-d)); \
 	echo "Overhead is $$((100*t/b))%, base is $$((b)), our compiler takes $$((t))"
 	
@@ -73,7 +73,7 @@ test_time: $(PROGS)
 	clang++ ./test-instr-cxx.cpp -o /dev/null -O3; \
 	b=$$(($$(date +%s%N)-d)); \
 	d=$$(date +%s%N); \
-	./heap-expo-clang++ ./test-instr-cxx.cpp -o /dev/null -O3; \
+	AFL_CXX=./heap-expo-clang++ /home/zekun/repo/afl-2.52b/afl-clang-fast++ -g ./test-instr-cxx.cpp -o /dev/null -O3; \
 	t=$$(($$(date +%s%N)-d)); \
 	echo "Overhead is $$((100*t/b))%, base is $$((b)), our compiler takes $$((t))"
 

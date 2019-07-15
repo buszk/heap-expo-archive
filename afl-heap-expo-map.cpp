@@ -13,42 +13,61 @@
 
 #include "afl-include.h"
 
-uint32_t shm_id;
+uint32_t shm_id,
+         he_shm_id;
 int32_t  child_pid,
          out_fd,
          bitmap_fd,
+         he_bitmap_fd,
          dev_null_fd = -1;
 char    *out_dir,
         *of,
         *out_file;
-char*    trace_bits;
-char     virgin_bits [HE_MAP_SIZE];
+char    *he_trace_bits,
+        *trace_bits;
+char     he_virgin_bits [HE_MAP_SIZE],
+         virgin_bits [MAP_SIZE];
 char   **use_argv;
 
 static void remove_shm() {
 
+    shmctl(he_shm_id, IPC_RMID, NULL);
     shmctl(shm_id, IPC_RMID, NULL);
     
 }
 
 void setup_shm() {
 
+    char* he_shm_str;
     char* shm_str;
-
-    memset(virgin_bits, 255, HE_MAP_SIZE);
-
-    shm_id = shmget(IPC_PRIVATE, HE_MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
-
-    if (shm_id < 0) exit(1);
 
     atexit(remove_shm);
 
+    memset(he_virgin_bits, 255, HE_MAP_SIZE);
+
+    he_shm_id = shmget(IPC_PRIVATE, HE_MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
+
+    if (he_shm_id < 0) exit(1);
+
+    he_shm_str = alloc_printf("%d", he_shm_id);
+
+    setenv(HE_SHM_ENV_VAR, he_shm_str, 1);
+
+	free(he_shm_str);
+    
+    memset(virgin_bits, 255, MAP_SIZE);
+
+    shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
+
+    if (shm_id < 0) exit(1);
+
     shm_str = alloc_printf("%d", shm_id);
 
-    setenv(HE_SHM_ENV_VAR, shm_str, 1);
+    setenv(SHM_ENV_VAR, shm_str, 1);
 
-	free(shm_str);
+    free(shm_str);
 
+    he_trace_bits = (char*)shmat(he_shm_id, NULL, 0);	
     trace_bits = (char*)shmat(shm_id, NULL, 0);	
 
 }
@@ -57,6 +76,8 @@ void run_target(char** argv) {
 
     int status;
 
+    memset(he_trace_bits, 0, HE_MAP_SIZE);
+    
     memset(trace_bits, 0, HE_MAP_SIZE);
     
     MEM_BARRIER();
@@ -137,36 +158,50 @@ void detect_file_args(char** argv) {
 
 }
 
-static inline void has_new_bits () {
-    uint64_t* current = (uint64_t*) trace_bits;
-    uint64_t* virgin  = (uint64_t*) virgin_bits;
+static inline int has_new_bits (char* t, char* v, size_t size) {
+    uint64_t* current = (uint64_t*) t;
+    uint64_t* virgin  = (uint64_t*) v;
     
-    uint32_t i = (HE_MAP_SIZE >> 3);
+    uint32_t i = (size >> 3);
+    
+    int res = 0;
 
     while (i--) {
         if (*current)  {
-            printf("O");
+            //printf("O");
             if (*current & *virgin) {
                 *virgin &= ~*current;
-                printf("X");
+                //printf("X");
+                res = 1;
             }
         }
         current++;
         virgin++;
     }
-    printf("\n");
+    //printf("\n");
+    return res;
 }
 
 void write_bitmap() {
     char* fname;
     int fd;
 
-    fname = alloc_printf("%s/fuzz_bitmap_heap_expo", out_dir);
+    fname = alloc_printf("%s/fuzz_bitmap_heap_expo.data", out_dir);
     fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 
     if (fd < 0) exit(1);
 
-    if (write(fd, virgin_bits, HE_MAP_SIZE)) {}
+    if (write(fd, he_virgin_bits, HE_MAP_SIZE)) {}
+
+    close(fd);
+    free(fname);
+
+    fname = alloc_printf("%s/fuzz_bitmap.data", out_dir);
+    fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+
+    if (fd < 0) exit(1);
+
+    if (write(fd, virgin_bits, MAP_SIZE)) {}
 
     close(fd);
     free(fname);
@@ -174,10 +209,14 @@ void write_bitmap() {
 
 int main(int argc, char** argv) {
     int opt;
-    uint32_t i, cov;
+    uint32_t i, cov1, cov2;
     struct dirent **ep;
     char* queue_dir;
-    char* fn;
+    char* fn1, *fn2;
+    int total_case = 0;
+    int cov_case = 0;
+    int alloc_case = 0;
+    int both_case = 0;
 
     while((opt = getopt(argc, argv, "o:")) > 0) 
         
@@ -192,8 +231,9 @@ int main(int argc, char** argv) {
 
     use_argv = argv + optind;
 
-    fn = alloc_printf("%s/fuzz_bitmap_heap_expo", out_dir);
-    if (true || access(fn, F_OK) == -1) {
+    fn1 = alloc_printf("%s/fuzz_bitmap_heap_expo.data", out_dir);
+    fn2 = alloc_printf("%s/fuzz_bitmap.data", out_dir);
+    if (access(fn1, F_OK) == -1 || access(fn2, F_OK)) {
         
         queue_dir = alloc_printf("%s/queue", out_dir);
 
@@ -215,7 +255,7 @@ int main(int argc, char** argv) {
 
                 of = alloc_printf("%s/%s", queue_dir, ep[i]->d_name);
                 
-                printf("file: %s\n", of);
+                //printf("file: %s\n", of);
 
                 out_fd = open(of, O_RDONLY | O_EXCL, 0600);
 
@@ -226,11 +266,18 @@ int main(int argc, char** argv) {
             if (!out_file)
                 close(out_fd);
             
-            has_new_bits();
+            int res1 = has_new_bits(he_trace_bits, he_virgin_bits, HE_MAP_SIZE);
+            int res2 = has_new_bits(trace_bits, virgin_bits, MAP_SIZE);
+            total_case ++;
+            if (res1) alloc_case ++;
+            if (res2) cov_case ++;
+            if (res1 && res2) both_case++;
+
+            if (res1 > res2) printf("X\n");
 
                 
         }
-        printf("Dir finished\n");
+        //printf("Dir finished\n");
 
         write_bitmap();
     } 
@@ -238,16 +285,23 @@ int main(int argc, char** argv) {
         printf("Use existing bitmap\n");
     }
 
-    bitmap_fd = open(fn, O_RDONLY | O_EXCL, 0600);
+    he_bitmap_fd = open(fn1, O_RDONLY | O_EXCL, 0600);
+
+    if (he_bitmap_fd < 0) exit(1);
+
+    free(fn1);
+
+    bitmap_fd = open(fn2, O_RDONLY | O_EXCL, 0600);
 
     if (bitmap_fd < 0) exit(1);
 
-    free(fn);
+    free(fn2);
+    
 
-    if (read(bitmap_fd, virgin_bits, HE_MAP_SIZE)) {}
+    if (read(he_bitmap_fd, he_virgin_bits, HE_MAP_SIZE)) {}
 
-    i = 0;
-    cov = 0;
+    if (read(bitmap_fd, virgin_bits, MAP_SIZE)) {}
+
     static uint8_t  counts[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3,
             4, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2,
             3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4,
@@ -260,13 +314,24 @@ int main(int argc, char** argv) {
             7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4,
             5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5,
             6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8 };
-    while (i < HE_MAP_SIZE) {
-        cov += (8 - counts[(uint8_t)virgin_bits[i]]);
-        i++;
+    for (i = 0, cov1 = 0; i < HE_MAP_SIZE; i++) {
+        cov1 += (8 - counts[(uint8_t)he_virgin_bits[i]]);
+    }
+    
+    for (i = 0, cov2 = 0; i < MAP_SIZE; i++) {
+        if ((uint8_t)virgin_bits[i] != 255)
+            cov2 ++;
     }
 
-    printf("Total bits: %d\n", cov);
-    printf("Bitmap cov: %.4f%%\n", (double)cov*100/(HE_MAP_SIZE*8));
+    printf("AFL Total bits: %d\n", cov2);
+    printf("AFL Bitmap cov: %.4f%%\n", (double)cov2*100/MAP_SIZE);
+
+    printf("HeapExop Total bits: %d\n", cov1);
+    printf("HeapExpo Bitmap cov: %.4f%%\n", (double)cov1*100/(HE_MAP_SIZE*8));
+
+    printf("total: %d, new cov: %d, new alloc: %d, both: %d\n",
+            total_case, cov_case, alloc_case, both_case);
+
 
 
 

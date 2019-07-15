@@ -183,7 +183,7 @@ EXT_C void global_hook(char* addr, size_t size) {
     UNLOCK(obj_mutex);
 }
 
-void __attribute__((constructor (101))) init_rt(void) {
+void __attribute__((constructor (1))) init_rt(void) {
     memory_objects = (he_map<uintptr_t, struct object_info_t>*)__malloc(sizeof(he_map<uintptr_t, struct object_info_t>));
     new(memory_objects) he_map<uintptr_t, struct object_info_t>;
     ptr_record = (he_unordered_map<uintptr_t, struct pointer_info_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, struct pointer_info_t>));
