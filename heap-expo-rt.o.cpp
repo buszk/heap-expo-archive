@@ -28,7 +28,7 @@
  * LVL1: Debug version, need to set env HEAP_EXPO_DEBUG
  * LVL2: Debug version
  */
-#define DEBUG_LVL 0
+#define DEBUG_LVL 1
 #if DEBUG_LVL >= 1
 #define PRINTF(...) __printf(__VA_ARGS__)
 #else
@@ -62,8 +62,11 @@ he_map<uintptr_t, struct object_info_t> *memory_objects;
 shared_mutex obj_mutex;
 he_unordered_map<uintptr_t, struct pointer_info_t> *ptr_record; // Log all all ptrs and the object addr 
 shared_mutex ptr_mutex;
+he_unordered_map<uintptr_t, uintptr_t> *dang_record;
+shared_mutex dang_mutex;
 
 bool he_initialized = false;
+int status = 0;
 
 
 #if DEBUG_LVL == 1
@@ -174,6 +177,8 @@ void __heap_expo_shm() {
 }
 #endif
 
+
+bool get_object_addr(uintptr_t, uintptr_t&, struct object_info_t *&);
 EXT_C void global_hook(char* addr, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)addr;
@@ -189,6 +194,8 @@ void __attribute__((constructor (1))) init_rt(void) {
     ptr_record = (he_unordered_map<uintptr_t, struct pointer_info_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, struct pointer_info_t>));
     new(ptr_record) he_unordered_map<uintptr_t, struct pointer_info_t>;
     ptr_record->reserve(1024);
+    dang_record = (he_unordered_map<uintptr_t, uintptr_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, uintptr_t>));
+    new(dang_record) he_unordered_map<uintptr_t, uintptr_t>;
     PRINTF("STL objects initialized\n");
 
 #ifdef AFL
@@ -198,8 +205,25 @@ void __attribute__((constructor (1))) init_rt(void) {
     he_initialized = true;
 }
 
+void check_dang() {
+    for (auto it = dang_record->begin(); it != dang_record->end(); it++ ) {
+        uintptr_t ptr_loc = it->first;
+        uintptr_t ptr_val = it->second;
+        uintptr_t obj_addr;
+        struct object_info_t *obj_info;
+        if (*(uintptr_t*) ptr_loc == ptr_val) {
+            get_object_addr(ptr_loc, obj_addr, obj_info);
+            PRINTF("[HeapExpo][Dangling] ptr[%016lx][%s] is not cleared\n", 
+                    ptr_loc, getTypeString(obj_info->type));
+            status = 86;
+        }
+    }
+    exit(status);
+}
+
 void __attribute__((destructor (65535))) fini_rt(void) {
     print_heap();
+    check_dang();
 #ifdef AFL
     print_map();
     print_remaining();
@@ -276,29 +300,32 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
         
         uintptr_t cur_val = *(uintptr_t*)ptr_loc;
 
-        /* Value did not change, set it to kernel space */
         if (cur_val != it->second.value) {
-            uintptr_t src_obj_addr = it->second.src_obj;
-            struct object_info_t *src_obj_info = it->second.src_info;
-            if (cur_val < src_obj_addr || cur_val >= src_obj_addr + src_obj_info->size) {
-                PRINTF("PTR[%016lx] has unknown behavior\n", ptr_loc);
-                PRINTF("Record: value: %016lx src_obj:%016lx dst_obj:%016lx\n",
-                        it->second.value, it->second.src_obj, it->second.dst_obj);
-                PRINTF("Current value: %016lx\n", cur_val);
-                if (!src_obj_info->out_edges.erase(ptr_loc)) 
-                    assert(false &&"smoit incongruence");
-                ptr_record->erase(it);
 
-                continue;
-            }
+            struct object_info_t *src_obj_info = it->second.src_info;
+
+            PRINTF("PTR[%016lx] has unknown behavior\n", ptr_loc);
+            PRINTF("Record: value: %016lx src_obj:%016lx dst_obj:%016lx\n",
+                    it->second.value, it->second.src_obj, it->second.dst_obj);
+            PRINTF("Current value: %016lx\n", cur_val);
+            if (!src_obj_info->out_edges.erase(ptr_loc)) 
+                assert(false &&"smoit incongruence");
+            ptr_record->erase(it);
+
+            continue;
 
         }
+        
+        /* Value did not change, set it to kernel space */
         if (invalidate)
 #if __x86_64__
             *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
 #else
             *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
 #endif
+        LOCK(dang_mutex);
+        dang_record->insert(make_pair<>(ptr_loc, *(uintptr_t*)ptr_loc));
+        UNLOCK(dang_mutex);
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
 
 #ifdef AFL
@@ -325,6 +352,14 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
             }
             UNLOCK(dst_obj_info->in_mutex);
         }
+
+        if (it->second.invalid) {
+            PRINTF("[HeapExpo][remove_invalid]: ptr_loc:%016lx\n", ptr_loc);
+            LOCK(dang_mutex);
+            dang_record->erase(it->first);
+            UNLOCK(dang_mutex);
+        }
+            
         ptr_record->erase(it);
     }
 
@@ -396,33 +431,50 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
             /* If value changed, we don't move this ptr */
             if (cur_val != it->second.value) {
                 PRINTF("PTR[%016lx] value has changed\n", ptr_loc);
+                LOCK(it->second.dst_info->in_mutex);
+                it->second.dst_info->in_edges.erase(ptr_loc);
+                UNLOCK(it->second.dst_info->in_mutex);
                 ptr_record->erase(it);
                 continue;
             }
 
-            PRINTF("MOVING PTR[%016lx] to %016lx, OFFSET:%016lx\n", ptr_loc, ptr_loc+offset, offset);
-            assert (it->second.dst_info);
-            assert (memory_objects->find(it->second.dst_obj) != memory_objects->end());
-            assert (it->second.dst_info == &memory_objects->at(it->second.dst_obj));
-            LOCK(it->second.dst_info->in_mutex);
-            if (! it->second.dst_info->in_edges.erase(ptr_loc))
-                assert(false && "in edge problem");
 
-            it->second.dst_info->in_edges.insert(ptr_loc+offset);
-            UNLOCK(it->second.dst_info->in_mutex);
+            PRINTF("MOVING %s PTR[%016lx] to %016lx, OFFSET:%016lx\n", 
+                    it->second.invalid? "INVALID": "",
+                    ptr_loc, ptr_loc+offset, offset);
+
+            if (!it->second.invalid) {
+
+                assert (it->second.dst_info);
+                assert (memory_objects->find(it->second.dst_obj) != memory_objects->end());
+                assert (it->second.dst_info == &memory_objects->at(it->second.dst_obj));
+                LOCK(it->second.dst_info->in_mutex);
+                if (! it->second.dst_info->in_edges.erase(ptr_loc))
+                    assert(false && "in edge problem");
+
+                it->second.dst_info->in_edges.insert(ptr_loc+offset);
+                UNLOCK(it->second.dst_info->in_mutex);
+
+            }
+
 
             /* Update outedges */
             memory_objects->at(newptr).out_edges.insert(ptr_loc+offset);
 
             /* Update ptr_record */
-            assert(it != ptr_record->end());
             ptr_record->insert(make_pair<>(ptr_loc+offset, it->second));
-            ptr_record->erase(it);
             ptr_record->at(ptr_loc+offset).src_obj += offset;
             ptr_record->at(ptr_loc+offset).src_info = &memory_objects->at(newptr);
+            ptr_record->erase(it);
 
         }
         memory_objects->at(oldptr).out_edges.clear();
+
+        /* 
+         * A fix for duktape
+         * If there is only one old copy left in memory, we left it as is,
+         * so ptr offset arithmetic can work 
+         */
         if (memory_objects->at(oldptr).in_edges.size() == 1)
             inval_in_ptrs = false;
     }
@@ -481,8 +533,16 @@ inline bool deregptr_(uintptr_t ptr_loc, bool keep) {
     SLOCK(ptr_mutex);
     auto it = ptr_record->find(ptr_loc);
     if (it != ptr_record->end()) {
+
         deregptr_dst(it);
         deregptr_src(it);
+
+        if (it->second.invalid) {
+            LOCK(dang_mutex);
+            dang_record->erase(ptr_loc);
+            UNLOCK(dang_mutex);
+        }
+
         SUNLOCK(ptr_mutex);
         if (!keep) {
             LOCK(ptr_mutex);
