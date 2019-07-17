@@ -19,6 +19,20 @@
 #define __pvalloc           __libc_pvalloc
 #define __valloc            __libc_valloc
 
+#ifdef MULTITHREADING
+#include <pthread.h>
+#define LOCK(mtx) mtx.lock()
+#define UNLOCK(mtx) mtx.unlock()
+#define SLOCK(mtx) mtx.lock_shared()
+#define SUNLOCK(mtx) mtx.unlock_shared()
+#else
+#define LOCK(mtx)
+#define UNLOCK(mtx)
+#define SLOCK(mtx)
+#define SUNLOCK(mtx)
+#endif
+
+
 #define alias(name, aliasname) _alias(name, aliasname)
 
 #define _alias(name, aliasname) \

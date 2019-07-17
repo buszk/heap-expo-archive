@@ -19,9 +19,8 @@
 #ifdef AFL
 #include "afl-include.h"
 #endif
-#include "rt-include.h"
-#include "malloc-rt.h"
 
+#include "rt-include.h"
 
 /*
  * LVL0: Production
@@ -35,42 +34,34 @@
 #define PRINTF(...) 
 #endif
 
-using namespace std;
+#define ESP_ST static
 
-#ifdef MULTITHREADING
-#include <pthread.h>
-#define LOCK(mtx) mtx.lock()
-#define UNLOCK(mtx) mtx.unlock()
-#define SLOCK(mtx) mtx.lock_shared()
-#define SUNLOCK(mtx) mtx.unlock_shared()
-#else
-#define LOCK(mtx)
-#define UNLOCK(mtx)
-#define SLOCK(mtx)
-#define SUNLOCK(mtx)
-#endif
+using namespace std;
 
 #ifdef AFL
 #include <fstream>
 #include <sys/shm.h>
-char  __heap_expo_initial[HE_MAP_SIZE];
-char* __heap_expo_ptr = __heap_expo_initial;
+ESP_ST char  __heap_expo_initial[HE_MAP_SIZE];
+ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
 #endif 
 
 
-he_map<uintptr_t, struct object_info_t> *memory_objects;
-shared_mutex obj_mutex;
-he_unordered_map<uintptr_t, struct pointer_info_t> *ptr_record; // Log all all ptrs and the object addr 
-shared_mutex ptr_mutex;
-he_unordered_map<uintptr_t, uintptr_t> *dang_record;
-shared_mutex dang_mutex;
+ESP_ST he_map<uintptr_t, struct object_info_t> *memory_objects;
+ESP_ST he_unordered_map<uintptr_t, struct pointer_info_t> *ptr_record; // Log all all ptrs and the object addr 
+ESP_ST he_unordered_map<uintptr_t, uintptr_t> *dang_record;
+
+#ifdef MULTITHREADING
+ESP_ST shared_mutex obj_mutex;
+ESP_ST shared_mutex ptr_mutex;
+ESP_ST shared_mutex dang_mutex;
+#endif
 
 bool he_initialized = false;
 int status = 0;
 
 
 #if DEBUG_LVL == 1
-int debug_mode = 0; 
+ESP_ST int debug_mode = 0; 
 #endif
 
 #if DEBUG_LVL >= 1
