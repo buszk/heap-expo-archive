@@ -1,10 +1,12 @@
 #include "llvm/Pass.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/LegacyPassManager.h"
+
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
@@ -14,7 +16,11 @@
 #include <cxxabi.h>
 #include <sstream>
 #include <time.h>
+
 #include <cstdlib>
+#include <cstdio>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <vector>
 
@@ -235,15 +241,41 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     size_t store_instr_cnt = 0;
     size_t stack_store_instr_cnt = 0;
     size_t store_const_global_cnt = 0;
+    int fd;
 
     HeapExpoFuncTracker() : FunctionPass(ID) {
         initialized = false;
     }
-    
+
+    void logID(DebugLoc DLoc, uint32_t cur_call) {
+
+        int n;
+        char buf[256];
+
+        if (!DLoc || !DLoc.getScope())
+            return;
+
+        DIScope *scp = cast<DIScope>(DLoc.getScope());
+
+        std::string fname = scp->getFilename();
+        n = sprintf(buf, "%08x: %s:%d\n", cur_call, fname.c_str(), DLoc.getLine());
+        
+        if ( n < 0 ) {
+            LOG(LVL_WARNING) << "sprintf failed\n";
+            return;
+        }
+        if (fd < 0) {
+            LOG(LVL_WARNING) << "fd not setup\n";
+            return;
+        } 
+        if (n != write(fd, buf, n)) 
+            return;
+    }
+
     void instrDereg(StoreInst *SI) {
 
         DebugLoc DLoc = SI->getDebugLoc();
-        if (!DLoc)
+        if (!DLoc) 
             DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
         
         uint32_t cur_call = rand() & 0xffffffff;
@@ -264,6 +296,9 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         CallInst *deregptr_call = CallInst::Create(deregptr, Args, "");
         deregptr_call->insertBefore(SI);
         deregptr_call->setDebugLoc(DLoc);
+
+        logID(DLoc, cur_call);
+
     }
 
     void instrReg(StoreInst *SI) {
@@ -291,6 +326,8 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         CallInst *regptr_call = CallInst::Create(regptr, Args, "");
         regptr_call->insertBefore(SI);
         regptr_call->setDebugLoc(DLoc);
+
+        logID(DLoc, cur_call);
     }
 
     virtual bool runOnFunction(Function &F) {
@@ -363,6 +400,8 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
         srand(time(NULL));
         
+        fd = open("store_inst.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
+        
         initialized = true;
         return false;
     }
@@ -376,6 +415,9 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         ss << "Instrumented tracking to " << store_const_global_cnt << 
             " store const global instructions\n";
         LOG(LVL_INFO) << ss.str();
+
+        close(fd);
+
         return false;
     }
 

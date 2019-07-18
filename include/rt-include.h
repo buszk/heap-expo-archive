@@ -5,6 +5,8 @@
 #include <set>
 #include <unordered_set>
 #include <map>
+#include <queue>
+#include <deque>
 #include <unordered_map>
 #include <shared_mutex>
 
@@ -31,7 +33,6 @@
 #define SLOCK(mtx)
 #define SUNLOCK(mtx)
 #endif
-
 
 #define alias(name, aliasname) _alias(name, aliasname)
 
@@ -94,6 +95,12 @@ using he_map = std::map<Key, T, std::less<Key>, he_allocator<std::pair<const Key
 
 template <typename Key, typename T>
 using he_unordered_map = std::unordered_map<Key, T, std::hash<Key>, std::equal_to<Key>, he_allocator<std::pair<const Key, T>>>;
+
+template <typename T>
+using he_deque = std::deque<T, he_allocator<T>>;
+
+template <typename T>
+using he_queue = std::queue<T, he_deque<T>>;
 
 enum memory_type_e { UNKNOWN, GLOBAL, HEAP, STACK };
 
@@ -195,5 +202,24 @@ struct pointer_info_t {
         id = copy.id;
     }
 
+};
+
+struct residual_pointer_t {
+    uintptr_t     loc      ;
+    uintptr_t     val      ;
+    uint32_t      src_sig  ;
+    uint32_t      dst_sig  ;
+    uint32_t      store_id ;
+    size_t        counter  ;
+
+    residual_pointer_t (uintptr_t l, uintptr_t v, uint32_t s, uint32_t d,
+            uint32_t id, size_t c) {
+        loc = l;
+        val = v;
+        src_sig = s;
+        dst_sig = d;
+        store_id = id;
+        counter = c;
+    }
 };
 #endif
