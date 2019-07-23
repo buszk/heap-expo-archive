@@ -13,6 +13,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> params;
     bool maybe_linking   = true,
          x_set           = false,
+         add_object      = true,
          multi_threading = false;
     int bit_mode = 0;
 
@@ -64,6 +65,10 @@ int main(int argc, char** argv) {
 
         if (cur == "-pthread" || cur == "-lpthread") 
             multi_threading = true;
+
+        if (cur.find("/heap-expo-rt") != std::string::npos) {
+            add_object = false;
+        }
     }
     
     /* 
@@ -77,38 +82,43 @@ int main(int argc, char** argv) {
         params.push_back("-lpthread");
         params.push_back("-lunwind");
         params.push_back("-lm");
+        params.push_back("-rdynamic");
 
         if (x_set) {
             params.push_back("-x");
             params.push_back("none");
         }
 
-        std::string suffix;
-        if (multi_threading)
-            suffix = "-mt.o";
-        else
-            suffix = ".o";
-            
-        switch (bit_mode) {
-            case 0:
-                params.push_back(obj_path + "/heap-expo-rt" + suffix);
-                break;
+        if (add_object) {
 
-            case 32:
-                params.push_back(obj_path + "/heap-expo-rt-32" + suffix);
-                if (access(params[params.size()-1].c_str(), R_OK)) {
-                    std::cerr << "-m32 is not supported by your compiler\n";
-                    return 1;
-                }
-                break;
+            std::string suffix;
+            if (multi_threading)
+                suffix = "-mt.o";
+            else
+                suffix = ".o";
+                
+            switch (bit_mode) {
+                case 0:
+                    params.push_back(obj_path + "/heap-expo-rt" + suffix);
+                    break;
 
-            case 64:
-                params.push_back(obj_path + "/heap-expo-rt-64" + suffix);
-                if (access(params[params.size()-1].c_str(), R_OK)) {
-                    std::cerr << "-m64 is not supported by your compiler\n";
-                    return 1;
-                }
-                break;
+                case 32:
+                    params.push_back(obj_path + "/heap-expo-rt-32" + suffix);
+                    if (access(params[params.size()-1].c_str(), R_OK)) {
+                        std::cerr << "-m32 is not supported by your compiler\n";
+                        return 1;
+                    }
+                    break;
+
+                case 64:
+                    params.push_back(obj_path + "/heap-expo-rt-64" + suffix);
+                    if (access(params[params.size()-1].c_str(), R_OK)) {
+                        std::cerr << "-m64 is not supported by your compiler\n";
+                        return 1;
+                    }
+                    break;
+
+            }
 
         }
         /* force c++ because rt will use STL lib */

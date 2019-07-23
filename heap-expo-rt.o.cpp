@@ -1,4 +1,3 @@
-#define AFL
 #include <cstdio>
 #include <utility>
 #include <map>
@@ -22,6 +21,8 @@
 
 #include "rt-include.h"
 #include "rt-malloc.h"
+#include "hash.h"
+#include <execinfo.h>
 
 /*
  * LVL0: Production
@@ -47,18 +48,24 @@ ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
 #endif 
 
 
-ESP_ST he_map<uintptr_t, struct object_info_t> *memory_objects;
-ESP_ST he_unordered_map<uintptr_t, struct pointer_info_t> *ptr_record; // Log all all ptrs and the object addr 
-ESP_ST he_unordered_map<uintptr_t, uintptr_t> *dang_record;
+using motype = he_map<uintptr_t, struct object_info_t>;
+ESP_ST motype *memory_objects;
 
-ESP_ST thread_local he_queue<residual_pointer_t> residuals;
+using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
+ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr 
+
+using rtype = he_list<residual_pointer_t>;
+ESP_ST thread_local rtype *residuals;
 ESP_ST thread_local size_t counter = 0;
 ESP_ST size_t residual_live_limit = 1000;
+
+using s2dtype = he_unordered_set<uint32_t>;
+ESP_ST s2dtype *sig2dbg;
 
 #ifdef MULTITHREADING
 ESP_ST shared_mutex obj_mutex;
 ESP_ST shared_mutex ptr_mutex;
-ESP_ST shared_mutex dang_mutex;
+ESP_ST shared_mutex sig_mutex;
 #endif
 
 ESP_ST bool he_initialized = false;
@@ -182,13 +189,14 @@ EXT_C void global_hook(char* addr, size_t size) {
 }
 
 inline void init_global_vars() {
-    memory_objects = (he_map<uintptr_t, struct object_info_t>*)__malloc(sizeof(he_map<uintptr_t, struct object_info_t>));
-    new(memory_objects) he_map<uintptr_t, struct object_info_t>;
-    ptr_record = (he_unordered_map<uintptr_t, struct pointer_info_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, struct pointer_info_t>));
-    new(ptr_record) he_unordered_map<uintptr_t, struct pointer_info_t>;
+
+    INT_MALLOC(memory_objects, motype); 
+
+    INT_MALLOC(ptr_record, prtype);
     ptr_record->reserve(1024);
-    dang_record = (he_unordered_map<uintptr_t, uintptr_t>*)__malloc(sizeof(he_unordered_map<uintptr_t, uintptr_t>));
-    new(dang_record) he_unordered_map<uintptr_t, uintptr_t>;
+
+    INT_MALLOC(sig2dbg, s2dtype);
+    
     PRINTF("STL objects initialized\n");
 
 }
@@ -204,9 +212,9 @@ inline void get_dang_params() {
 
 void __attribute__((constructor (1))) init_rt(void) {
 
-    init_global_vars();
-
     get_debug_mode();
+
+    init_global_vars();
 
     get_dang_params();
 
@@ -217,37 +225,70 @@ void __attribute__((constructor (1))) init_rt(void) {
     he_initialized = true;
 }
 
-void check_dang() {
-    for (auto it = dang_record->begin(); it != dang_record->end(); it++ ) {
-        uintptr_t ptr_loc = it->first;
-        uintptr_t ptr_val = it->second;
-        uintptr_t obj_addr;
-        struct object_info_t *obj_info;
-        if (*(uintptr_t*) ptr_loc == ptr_val) {
-            get_object_addr(ptr_loc, obj_addr, obj_info);
-            PRINTF("[HeapExpo][Dangling] ptr[%016lx][%s] is not cleared\n", 
-                    ptr_loc, getTypeString(obj_info->type));
-            status = 86;
-        }
-    }
-    exit(status);
-}
-
 void __attribute__((destructor (65535))) fini_rt(void) {
     print_heap();
-    check_dang();
 #ifdef AFL
     print_map();
     print_remaining();
 #endif
+    exit(status);
     //__free(ptr_record);
     //__free(memory_objects);
 }
 
+inline void report_dangling(residual_pointer_t &ptr) {
+
+    PRINTF("[HeapExpo][Dangling]: loc[%016lx], val[%016lx], src_sig[%08x], "
+           "dst_sig[%08x], store_id[%08x], free_sig[%08x], counter_diff[%u]\n", 
+            ptr.loc, ptr.val, ptr.src_sig, ptr.dst_sig, ptr.store_id,
+            ptr.free_sig, counter - ptr.counter);
+
+}
+
+inline void check_residuals() {
+
+    counter++;
+
+    if (!residuals) 
+        INT_MALLOC(residuals, rtype);
+
+    while (!residuals->empty() && counter >= residual_live_limit &&
+            residuals->front().counter < counter - residual_live_limit) {
+        residual_pointer_t  ptr = residuals->front();
+        uintptr_t src_addr;
+        struct object_info_t *src_info;
+        get_object_addr(ptr.loc, src_addr, src_info);
+
+        /* Is loc still valid? Does value changed? */
+        if (src_addr && *(uintptr_t*)ptr.loc == ptr.val) {
+            
+            report_dangling(ptr);
+    
+            status = 99;
+        }
+
+        residuals->pop_front();
+    }
+}
+
+inline void remove_from_residuals(uintptr_t loc) {
+
+    if (!residuals)
+        INT_MALLOC(residuals, rtype);
+
+    for (auto it  = residuals->begin(); it != residuals->end(); it++) {
+        if (it->loc == loc) {
+            residuals->erase(it);
+            break;
+        }
+    }
+}
+
 inline uint32_t get_signature() {
-    int cnt = -1;
-    int size = 4;
-    //void *array[4] = {0};
+    /* ignore this func, hook, and malloc/free */
+    int cnt = -3;
+    int size = 8;
+    void *array[8] = {0};
     uint32_t sig = 0;
     unw_cursor_t cursor;
     unw_context_t uc;
@@ -257,9 +298,22 @@ inline uint32_t get_signature() {
     while (unw_step(&cursor) > 0 && cnt < size) {
         unw_get_reg(&cursor, UNW_REG_IP, &ip);
         if (++cnt >= 0) {
-            //array[cnt] = (void*)ip;
-            sig ^= ((uintptr_t)ip & 0xffff) << (cnt%4)*16;
+            array[cnt] = (void*)ip;
+            //sig ^= ((uintptr_t)ip & 0xffff) << (cnt%4)*16;
         }
+    }
+    sig = hash_addr_list((uintptr_t*)array, cnt);
+    SLOCK(sig_mutex);
+    if (sig2dbg->find(sig) == sig2dbg->end()) {
+        PRINTF("SIG[%08x][%d]:\n", sig, cnt);
+        if (debug_mode == 1)
+            backtrace_symbols_fd(array, cnt, 2);
+        SUNLOCK(sig_mutex);
+        LOCK(sig_mutex);
+        sig2dbg->insert(sig);
+        UNLOCK(sig_mutex);
+    } else {
+        SUNLOCK(sig_mutex);
     }
     return sig;
 }
@@ -282,7 +336,7 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
     }
 }
 
-inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
+inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
     auto moit = memory_objects->find(ptr);
 
@@ -335,13 +389,10 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
 #else
             *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
 #endif
-        LOCK(dang_mutex);
-        dang_record->insert(make_pair<>(ptr_loc, *(uintptr_t*)ptr_loc));
-        UNLOCK(dang_mutex);
         PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
-        residuals.push(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
+        residuals->push_back(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
                     it->second.src_info->signature, it->second.dst_info->signature,
-                    it->second.id, counter));
+                    free_sig, it->second.id, counter));
 
 
 #ifdef AFL
@@ -371,9 +422,7 @@ inline void dealloc_hook_(uintptr_t ptr, bool invalidate) {
 
         if (it->second.invalid) {
             PRINTF("[HeapExpo][remove_invalid]: ptr_loc:%016lx\n", ptr_loc);
-            LOCK(dang_mutex);
-            dang_record->erase(it->first);
-            UNLOCK(dang_mutex);
+            remove_from_residuals(ptr_loc);
         }
             
         ptr_record->erase(it);
@@ -397,9 +446,10 @@ EXT_C void dealloc_hook(char* ptr_) {
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
     if (ptr) {
+        uint32_t sig = get_signature();
         LOCK(obj_mutex);
         LOCK(ptr_mutex);
-        dealloc_hook_(ptr, true);
+        dealloc_hook_(ptr, sig, true);
         UNLOCK(ptr_mutex);
         UNLOCK(obj_mutex);
     }
@@ -417,7 +467,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     if (!he_initialized) return;
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
-    int offset = newptr - oldptr;
+    size_t offset = newptr - oldptr;
     uint32_t sig = get_signature();
     PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     LOCK(obj_mutex);
@@ -443,6 +493,22 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
 
             auto it = ptr_record->find(ptr_loc);
             assert (it != ptr_record->end()) ;
+            
+            /* 
+             * Shrinked. Ignore ptrs outside range 
+             * Must be checked before dereference the addr
+             */
+            if (ptr_loc >= oldptr + newsize) {
+                PRINTF("PTR[%016lx] is discarded while realloc to a smaller area\n", ptr_loc);
+                if (!it->second.invalid) {
+                    LOCK(it->second.dst_info->in_mutex);
+                    it->second.dst_info->in_edges.erase(ptr_loc);
+                    UNLOCK(it->second.dst_info->in_mutex);
+                }
+                ptr_record->erase(it);
+                continue;
+            }
+
             uintptr_t cur_val = *(uintptr_t*)(ptr_loc+offset);
 
             /* If value changed, we don't move this ptr */
@@ -496,7 +562,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
             inval_in_ptrs = false;
     }
     if (oldptr)
-        dealloc_hook_(oldptr, inval_in_ptrs);
+        dealloc_hook_(oldptr, sig, inval_in_ptrs);
 
     UNLOCK(ptr_mutex);
     UNLOCK(obj_mutex);
@@ -519,30 +585,6 @@ bool get_object_addr(uintptr_t addr, uintptr_t &object_addr, struct object_info_
         return 1;
     }
     return 0;
-}
-
-inline void check_residuals() {
-    counter++;
-    while (!residuals.empty() && counter >= residual_live_limit &&
-            residuals.front().counter < counter - residual_live_limit) {
-        residual_pointer_t  ptr = residuals.front();
-        uintptr_t src_addr;
-        struct object_info_t *src_info;
-        get_object_addr(ptr.loc, src_addr, src_info);
-
-        /* Is loc still valid? Does value changed? */
-        if (src_addr && *(uintptr_t*)ptr.loc == ptr.val) {
-
-            PRINTF("[HeapExpo][Dangling]: loc[%016lx], val[%016lx], src_sig[%08lx], "
-                   "dst_sig[%08lx], store_id[%08lx], counter_diff[%u]\n", 
-                    ptr.loc, ptr.val, ptr.src_sig, ptr.dst_sig, ptr.store_id,
-                    counter - ptr.counter);
-    
-            status = 99;
-        }
-
-        residuals.pop();
-    }
 }
 
 inline void deregptr_dst(he_unordered_map<uintptr_t, struct pointer_info_t>::iterator it) {
@@ -579,9 +621,7 @@ inline bool deregptr_(uintptr_t ptr_loc, bool keep) {
         deregptr_src(it);
 
         if (it->second.invalid) {
-            LOCK(dang_mutex);
-            dang_record->erase(ptr_loc);
-            UNLOCK(dang_mutex);
+            remove_from_residuals(ptr_loc);
         }
 
         SUNLOCK(ptr_mutex);

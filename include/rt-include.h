@@ -5,8 +5,7 @@
 #include <set>
 #include <unordered_set>
 #include <map>
-#include <queue>
-#include <deque>
+#include <list>
 #include <unordered_map>
 #include <shared_mutex>
 
@@ -20,6 +19,11 @@
 #define __memalign          __libc_memalign
 #define __pvalloc           __libc_pvalloc
 #define __valloc            __libc_valloc
+
+#define INT_MALLOC(ptr, type) \
+    ptr = (type*)__malloc(sizeof(type)); \
+    new(ptr) type
+    
 
 #ifdef MULTITHREADING
 #include <pthread.h>
@@ -97,10 +101,7 @@ template <typename Key, typename T>
 using he_unordered_map = std::unordered_map<Key, T, std::hash<Key>, std::equal_to<Key>, he_allocator<std::pair<const Key, T>>>;
 
 template <typename T>
-using he_deque = std::deque<T, he_allocator<T>>;
-
-template <typename T>
-using he_queue = std::queue<T, he_deque<T>>;
+using he_list = std::list<T, he_allocator<T>>;
 
 enum memory_type_e { UNKNOWN, GLOBAL, HEAP, STACK };
 
@@ -209,15 +210,17 @@ struct residual_pointer_t {
     uintptr_t     val      ;
     uint32_t      src_sig  ;
     uint32_t      dst_sig  ;
+    uint32_t      free_sig ;
     uint32_t      store_id ;
     size_t        counter  ;
 
     residual_pointer_t (uintptr_t l, uintptr_t v, uint32_t s, uint32_t d,
-            uint32_t id, size_t c) {
+            uint32_t f, uint32_t id, size_t c) {
         loc = l;
         val = v;
         src_sig = s;
         dst_sig = d;
+        free_sig = f;
         store_id = id;
         counter = c;
     }
