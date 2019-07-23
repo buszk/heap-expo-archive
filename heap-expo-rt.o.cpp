@@ -247,8 +247,6 @@ inline void report_dangling(residual_pointer_t &ptr) {
 
 inline void check_residuals() {
 
-    counter++;
-
     if (!residuals) 
         INT_MALLOC(residuals, rtype);
 
@@ -269,6 +267,9 @@ inline void check_residuals() {
 
         residuals->pop_front();
     }
+    
+    counter++;
+
 }
 
 inline void remove_from_residuals(uintptr_t loc) {
