@@ -15,7 +15,7 @@
 #include <exception>
 #include <cxxabi.h>
 #include <sstream>
-#include <time.h>
+#include <sys/time.h>
 
 #include <cstdlib>
 #include <cstdio>
@@ -398,7 +398,9 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         regptr = cast<Function>(regptr_def);
         regptr->setCallingConv(CallingConv::C);
 
-        srand(time(NULL));
+        struct timeval time;
+        gettimeofday(&time, NULL);
+        srand((time.tv_sec*1000) + (time.tv_usec/1000));
         
         fd = open("store_inst.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
         
