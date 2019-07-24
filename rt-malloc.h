@@ -17,8 +17,8 @@ EXT_C void* calloc(size_t num, size_t size) {
 }
 
 EXT_C void free(void* ptr) {
-    __free(ptr);
     dealloc_hook((char*)ptr);
+    __free(ptr);
 }
 
 EXT_C void* realloc(void* old_ptr, size_t new_size) {

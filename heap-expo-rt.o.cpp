@@ -55,7 +55,7 @@ using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
 ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr 
 
 using rtype = he_list<residual_pointer_t>;
-ESP_ST thread_local rtype *residuals;
+ESP_ST thread_local rtype *residuals = NULL;
 ESP_ST thread_local size_t counter = 0;
 ESP_ST size_t residual_live_limit = 1000;
 
@@ -247,11 +247,14 @@ inline void report_dangling(residual_pointer_t &ptr) {
 
 inline void check_residuals() {
 
-    if (!residuals) 
+    if (!residuals)  {
+
         INT_MALLOC(residuals, rtype);
 
+    }
+
     while (!residuals->empty() && counter >= residual_live_limit &&
-            residuals->front().counter < counter - residual_live_limit) {
+            residuals->front().counter <= counter - residual_live_limit) {
         residual_pointer_t  ptr = residuals->front();
         uintptr_t src_addr;
         struct object_info_t *src_info;
@@ -272,6 +275,20 @@ inline void check_residuals() {
 
 }
 
+inline void check_double_free(uintptr_t val) {
+    bool invalid;
+#ifdef __x86_64__
+    invalid = !!(val & 0xffff800000000000);
+#else 
+    invalid = !!(val & 0xc0000000);
+#endif
+
+    if (invalid) {
+        PRINTF("[HeapExpo] Double Free detected. Trying to free %x", val);
+        exit(98);
+    }
+}
+
 inline void remove_from_residuals(uintptr_t loc) {
 
     if (!residuals)
@@ -280,6 +297,19 @@ inline void remove_from_residuals(uintptr_t loc) {
     for (auto it  = residuals->begin(); it != residuals->end(); it++) {
         if (it->loc == loc) {
             residuals->erase(it);
+            break;
+        }
+    }
+
+}
+
+inline void update_residual_loc(uintptr_t oldloc, uintptr_t newloc) {
+    if (!residuals)
+        INT_MALLOC(residuals, rtype);
+
+    for (auto it = residuals->begin(); it != residuals->end(); it++) {
+        if (it->loc == oldloc) {
+            it->loc = newloc;
             break;
         }
     }
@@ -420,8 +450,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
             }
             UNLOCK(dst_obj_info->in_mutex);
         }
-
-        if (it->second.invalid) {
+        else {
             PRINTF("[HeapExpo][remove_invalid]: ptr_loc:%016lx\n", ptr_loc);
             remove_from_residuals(ptr_loc);
         }
@@ -448,6 +477,7 @@ EXT_C void dealloc_hook(char* ptr_) {
     PRINTF("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
     if (ptr) {
         uint32_t sig = get_signature();
+        check_double_free(ptr);
         LOCK(obj_mutex);
         LOCK(ptr_mutex);
         dealloc_hook_(ptr, sig, true);
@@ -506,6 +536,9 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
                     it->second.dst_info->in_edges.erase(ptr_loc);
                     UNLOCK(it->second.dst_info->in_mutex);
                 }
+                else {
+                    remove_from_residuals(ptr_loc);
+                }
                 ptr_record->erase(it);
                 continue;
             }
@@ -539,6 +572,8 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
                 it->second.dst_info->in_edges.insert(ptr_loc+offset);
                 UNLOCK(it->second.dst_info->in_mutex);
 
+            } else {
+                update_residual_loc(ptr_loc, ptr_loc+offset);
             }
 
 
