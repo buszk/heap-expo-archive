@@ -72,6 +72,7 @@ ESP_ST bool he_initialized = false;
 ESP_ST int status = 0;
 
 
+ESP_ST int fdcopy = -1;
 #if DEBUG_LVL == 1
 ESP_ST int debug_mode = 0; 
 #endif
@@ -82,6 +83,7 @@ void __printf(const char * format, ...) {
     if (debug_mode == 2) return;
 #endif
 
+    /* Make a copy in case stderr got closed */
     int n1, n2, n3;
     char str[256] = {0};
     va_list args;
@@ -89,7 +91,7 @@ void __printf(const char * format, ...) {
     va_start(args, format);
     n2 = vsnprintf(str+n1, 256, format, args);
     va_end(args);
-    if (!(n3 = write(2, str, n1+n2))) 
+    if (!(n3 = write(fdcopy, str, n1+n2))) 
         abort();
 }
 #endif
@@ -214,6 +216,8 @@ void __attribute__((constructor (1))) init_rt(void) {
 
     get_debug_mode();
 
+    fdcopy = dup(2);
+
     init_global_vars();
 
     get_dang_params();
@@ -231,7 +235,11 @@ void __attribute__((destructor (65535))) fini_rt(void) {
     print_map();
     print_remaining();
 #endif
-    exit(status);
+
+    /* Quiet configure scripts that may use exist status */ 
+    if (status) 
+        exit(status);
+
     //__free(ptr_record);
     //__free(memory_objects);
 }
@@ -338,7 +346,7 @@ inline uint32_t get_signature() {
     if (sig2dbg->find(sig) == sig2dbg->end()) {
         PRINTF("SIG[%08x][%d]:\n", sig, cnt);
         if (debug_mode == 1)
-            backtrace_symbols_fd(array, cnt, 2);
+            backtrace_symbols_fd(array, cnt, fdcopy);
         SUNLOCK(sig_mutex);
         LOCK(sig_mutex);
         sig2dbg->insert(sig);
@@ -594,8 +602,10 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
          * If there is only one old copy left in memory, we left it as is,
          * so ptr offset arithmetic can work 
          */
+        /*
         if (memory_objects->at(oldptr).in_edges.size() == 1)
             inval_in_ptrs = false;
+        */
     }
     if (oldptr)
         dealloc_hook_(oldptr, sig, inval_in_ptrs);
