@@ -1,7 +1,7 @@
 #define MAP_SIZE (1<<16)
 #define HE_MAP_SIZE (1<<13)
 
-#define HE_SHM_ENV_VAR "HEAP_EXPO_SHM"
+#define HE_SHM_ENV_VAR "__HEAPO_SHM_ID"
 #define SHM_ENV_VAR "__AFL_SHM_ID"
 
 #define MEM_BARRIER() \

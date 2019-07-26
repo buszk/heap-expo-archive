@@ -15,6 +15,7 @@
 #include <libunwind-x86.h>
 #endif
 
+#define AFL
 #ifdef AFL
 #include "afl-include.h"
 #endif
@@ -144,35 +145,7 @@ EXT_C void print_heap() {
 #endif
 }
 
-#ifdef AFL
-inline void print_map() {
-#if DEBUG_LVL >1
-    ofstream fout;
-    PRINTF(3, "Map printing\n");
-    fout.open("map", ios::binary|ios::out);
-
-    fout.write(__heap_expo_ptr, HE_MAP_SIZE);
-    fout.close();
-    PRINTF(3, "Map printed\n");
-#endif
-}
-
-void print_remaining() {
-    he_unordered_set<int32_t> labels;
-    uint32_t sig;
-    uint16_t offset;
-    for (auto moit = memory_objects->begin(); moit != memory_objects->end(); moit++) {
-        sig = moit->second.signature;
-        for (uintptr_t p: moit->second.in_edges) {
-            labels.insert(ptr_record->at(p).id);
-        }
-        offset = hash<uint32_t>()(sig) & 0xfff + 0x1000;
-        PRINTF(3, "[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
-        __heap_expo_ptr[offset] |= (1 << labels.size());
         
-        labels.clear();
-    }
-}
 
 void __heap_expo_shm() {
 
@@ -185,12 +158,13 @@ void __heap_expo_shm() {
 
         if (__heap_expo_ptr == (void*)-1) exit(1);
 
+        memset(__heap_expo_ptr, 0x0, HE_MAP_SIZE);
+    
+        __heap_expo_ptr[0] = 1;
+
     }
     
-    memset(__heap_expo_ptr, 0x0, HE_MAP_SIZE);
-    __heap_expo_ptr[0] = 1;
 }
-#endif
 
 
 bool get_object_addr(uintptr_t, uintptr_t&, struct object_info_t *&);
@@ -233,7 +207,7 @@ void __attribute__((constructor (1))) init_rt(void) {
         invalidate_mode = 2;
 
     if (getenv("HEXPO_LIMIT"))
-        residual_live_limit = atoi(getenv("HEAP_EXPO_LIMIT"));
+        residual_live_limit = atoi(getenv("HEXPO_LIMIT"));
 
     /* Default to 1000 */
     if (residual_live_limit < 0)
@@ -252,12 +226,14 @@ void __attribute__((constructor (1))) init_rt(void) {
 }
 
 void __attribute__((destructor (65535))) fini_rt(void) {
-    print_heap();
-#ifdef AFL
-    print_map();
-    print_remaining();
-#endif
 
+    print_heap();
+
+    /* 
+     * These frees may cause double free. 
+     * Sometimes they are freed before dtor
+     */
+    //__free(sig2dbg);
     //__free(ptr_record);
     //__free(memory_objects);
 }
@@ -278,15 +254,18 @@ inline void report_dangling(residual_pointer_t &ptr) {
             ptr.free_sig, counter - ptr.counter, ptr.counter, ptr.adj_cnt);
 
     status = 99;
+
+#ifdef AFL
+    if (__heap_expo_ptr != __heap_expo_initial)
+        __heap_expo_ptr[(ptr.store_id/8) % HE_MAP_SIZE] |= (1 << ptr.store_id % 8);
+#endif
+
 }
 
 inline void check_residuals() {
 
-    if (!residuals)  {
-
+    if (!residuals) 
         INT_MALLOC(residuals, rtype);
-
-    }
 
     while (!residuals->empty() &&
             residuals->front().adj_cnt <= counter - residual_live_limit) {
@@ -324,7 +303,7 @@ inline void check_double_free(uintptr_t val) {
 inline void remove_from_residuals(uintptr_t loc) {
 
     if (!residuals)
-        INT_MALLOC(residuals, rtype);
+        return;
 
     for (auto it  = residuals->begin(); it != residuals->end(); it++) {
         if (it->loc == loc) {
@@ -336,8 +315,9 @@ inline void remove_from_residuals(uintptr_t loc) {
 }
 
 inline void update_residual_loc(uintptr_t oldloc, uintptr_t newloc) {
+
     if (!residuals)
-        INT_MALLOC(residuals, rtype);
+        return;
 
     for (auto it = residuals->begin(); it != residuals->end(); it++) {
         if (it->loc == oldloc) {
@@ -408,10 +388,6 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     if (moit == memory_objects->end()) {
         return;
     }
-#ifdef AFL
-    uint32_t sig = moit->second.signature;
-    he_unordered_set<uintptr_t> labels = {};
-#endif
 
     PRINTF(3, "[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
 
@@ -458,17 +434,15 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
                     it->second.src_info->signature, it->second.dst_info->signature,
                     free_sig, it->second.id, counter));
 
-
-#ifdef AFL
-        labels.insert(it->second.id);
-#endif
-
         it->second.invalid = true;
     }
 
-    for (auto &p: tmp) {
-        p.adj_cnt -= tmp.size();
-    }
+    for (auto &p: tmp) 
+        p.adj_cnt += tmp.size();
+
+    if (!residuals)
+        INT_MALLOC(residuals, rtype);
+
     residuals->merge(tmp, cntcmp);
 
     SUNLOCK(moit->second.in_mutex);
@@ -502,11 +476,6 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
     memory_objects->erase(moit);
    
-#ifdef AFL
-    uint16_t offset = hash<uint32_t>()(sig) & 0xfff;
-    PRINTF(3, "[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
-    __heap_expo_ptr[offset] |= (1 << labels.size());
-#endif
 }
 
 /* XXX: unwind stack */
