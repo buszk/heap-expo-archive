@@ -212,10 +212,11 @@ struct residual_pointer_t {
     uint32_t      dst_sig  ;
     uint32_t      free_sig ;
     uint32_t      store_id ;
-    size_t        counter  ;
+    int64_t       counter  ;
+    int64_t       adj_cnt  ;
 
     residual_pointer_t (uintptr_t l, uintptr_t v, uint32_t s, uint32_t d,
-            uint32_t f, uint32_t id, size_t c) {
+            uint32_t f, uint32_t id, int64_t c) {
         loc = l;
         val = v;
         src_sig = s;
@@ -223,6 +224,11 @@ struct residual_pointer_t {
         free_sig = f;
         store_id = id;
         counter = c;
+        adj_cnt = c;
     }
 };
+
+bool cntcmp(residual_pointer_t a, residual_pointer_t b) {
+    return a.adj_cnt < b.adj_cnt;
+}
 #endif

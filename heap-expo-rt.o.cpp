@@ -56,8 +56,8 @@ ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr
 
 using rtype = he_list<residual_pointer_t>;
 ESP_ST thread_local rtype *residuals = NULL;
-ESP_ST thread_local size_t counter = 0;
-ESP_ST size_t residual_live_limit = 1000;
+ESP_ST thread_local int64_t counter = 0;
+ESP_ST int64_t residual_live_limit = 1000;
 
 using s2dtype = he_unordered_set<uint32_t>;
 ESP_ST s2dtype *sig2dbg;
@@ -71,16 +71,29 @@ ESP_ST shared_mutex sig_mutex;
 ESP_ST bool he_initialized = false;
 ESP_ST int status = 0;
 
+/* 
+ * 0 for not initialized
+ * 1 for no invalidation
+ * 2 for all but realloc invalidation
+ * 3 for all invalidation
+ */
+ESP_ST int invalidate_mode = 0;
 
 ESP_ST int fdcopy = -1;
 #if DEBUG_LVL == 1
-ESP_ST int debug_mode = 0; 
+/*
+ * 0 for not initialized
+ * 1 for no debug info
+ * 2 for only essential info
+ * 3 for all debug info
+ */
+ESP_ST int print_mode = 0; 
 #endif
 
 #if DEBUG_LVL >= 1
-void __printf(const char * format, ...) {
+void __printf(int lvl, const char * format, ...) {
 #if DEBUG_LVL == 1
-    if (debug_mode == 2) return;
+    if (print_mode < lvl) return;
 #endif
 
     /* Make a copy in case stderr got closed */
@@ -98,26 +111,26 @@ void __printf(const char * format, ...) {
 
 EXT_C void msg(const char* str) {
 #if DEBUG_LVL >=1
-    __printf(str);
+    __printf(3, str);
 #endif
 }
 void print_memory_objects() {
     SLOCK(obj_mutex);
-    PRINTF("Objects List:\n");
+    PRINTF(3, "Objects List:\n");
     for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
-        PRINTF("%s Object: %016lx:%016lx\n", getTypeString(it->second.type), it->first, it->second.size);
+        PRINTF(3, "%s Object: %016lx:%016lx\n", getTypeString(it->second.type), it->first, it->second.size);
     }
     SUNLOCK(obj_mutex);
 }
 
 void print_edges() {
-    PRINTF("Edges List:\n");
+    PRINTF(3, "Edges List:\n");
     SLOCK(obj_mutex);
     SLOCK(ptr_mutex);
     for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
         for (uintptr_t ptr_loc: it->second.out_edges) {
             assert(ptr_record->find(ptr_loc) != ptr_record->end() && "ptr_record does not have this ptr");
-            PRINTF("Heap Edge: %016lx->%016lx\n", it->first, ptr_record->at(ptr_loc).dst_obj);
+            PRINTF(3, "Heap Edge: %016lx->%016lx\n", it->first, ptr_record->at(ptr_loc).dst_obj);
         }
     }
     SUNLOCK(ptr_mutex);
@@ -135,12 +148,12 @@ EXT_C void print_heap() {
 inline void print_map() {
 #if DEBUG_LVL >1
     ofstream fout;
-    PRINTF("Map printing\n");
+    PRINTF(3, "Map printing\n");
     fout.open("map", ios::binary|ios::out);
 
     fout.write(__heap_expo_ptr, HE_MAP_SIZE);
     fout.close();
-    PRINTF("Map printed\n");
+    PRINTF(3, "Map printed\n");
 #endif
 }
 
@@ -154,7 +167,7 @@ void print_remaining() {
             labels.insert(ptr_record->at(p).id);
         }
         offset = hash<uint32_t>()(sig) & 0xfff + 0x1000;
-        PRINTF("[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
+        PRINTF(3, "[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
         __heap_expo_ptr[offset] |= (1 << labels.size());
         
         labels.clear();
@@ -184,7 +197,7 @@ bool get_object_addr(uintptr_t, uintptr_t&, struct object_info_t *&);
 EXT_C void global_hook(char* addr, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)addr;
-    PRINTF("[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
+    PRINTF(3, "[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
     LOCK(obj_mutex);
     memory_objects->insert(make_pair<>(ptr, object_info_t(size, GLOBAL)));
     UNLOCK(obj_mutex);
@@ -199,28 +212,37 @@ inline void init_global_vars() {
 
     INT_MALLOC(sig2dbg, s2dtype);
     
-    PRINTF("STL objects initialized\n");
+    PRINTF(3, "STL objects initialized\n");
 
-}
-
-inline void get_debug_mode() {
-    debug_mode = getenv("HEAP_EXPO_DEBUG") ? 1 : 2;
-}
-
-inline void get_dang_params() {
-    if (getenv("HEAP_EXPO_LIMIT"))
-        residual_live_limit = atoi(getenv("HEAP_EXPO_LIMIT"));
 }
 
 void __attribute__((constructor (1))) init_rt(void) {
 
-    get_debug_mode();
+    if (getenv("HEXPO_DEBUG"))
+        print_mode = atoi(getenv("HEXPO_DEBUG"));
 
+    /* Default to no log */
+    if (print_mode <= 0 || print_mode > 3)
+        print_mode = 1;
+
+    if (getenv("HEXPO_INVALID"))
+        invalidate_mode = atoi(getenv("HEXPO_INVALID"));
+
+    /* Default to invalidate all but realloc residuals */
+    if (invalidate_mode <=0 || invalidate_mode > 3)
+        invalidate_mode = 2;
+
+    if (getenv("HEXPO_LIMIT"))
+        residual_live_limit = atoi(getenv("HEAP_EXPO_LIMIT"));
+
+    /* Default to 1000 */
+    if (residual_live_limit < 0)
+        residual_live_limit = 1000;
+
+    /* Copy stderr in case it's closed */
     fdcopy = dup(2);
 
     init_global_vars();
-
-    get_dang_params();
 
 #ifdef AFL
     __heap_expo_shm();
@@ -236,21 +258,26 @@ void __attribute__((destructor (65535))) fini_rt(void) {
     print_remaining();
 #endif
 
-    /* Quiet configure scripts that may use exist status */ 
-    if (status) 
-        exit(status);
-
     //__free(ptr_record);
     //__free(memory_objects);
 }
 
+void __attribute__((destructor (0))) exit_with_code(void) {
+
+    /* Quiet configure scripts that may use exist status */ 
+    if (status) exit(status);
+
+}
+
 inline void report_dangling(residual_pointer_t &ptr) {
 
-    PRINTF("[HeapExpo][Dangling]: loc[%016lx], val[%016lx], src_sig[%08x], "
-           "dst_sig[%08x], store_id[%08x], free_sig[%08x], counter_diff[%u]\n", 
+    PRINTF(2, "[HeapExpo][Dangling]: loc[%016lx], val[%016lx], src_sig[%08x], "
+           "dst_sig[%08x], store_id[%08x], free_sig[%08x], counter_diff[%u]\n"
+           "counter[%u], adj_counter[%u]" , 
             ptr.loc, ptr.val, ptr.src_sig, ptr.dst_sig, ptr.store_id,
-            ptr.free_sig, counter - ptr.counter);
+            ptr.free_sig, counter - ptr.counter, ptr.counter, ptr.adj_cnt);
 
+    status = 99;
 }
 
 inline void check_residuals() {
@@ -261,20 +288,16 @@ inline void check_residuals() {
 
     }
 
-    while (!residuals->empty() && counter >= residual_live_limit &&
-            residuals->front().counter <= counter - residual_live_limit) {
+    while (!residuals->empty() &&
+            residuals->front().adj_cnt <= counter - residual_live_limit) {
         residual_pointer_t  ptr = residuals->front();
         uintptr_t src_addr;
         struct object_info_t *src_info;
         get_object_addr(ptr.loc, src_addr, src_info);
 
         /* Is loc still valid? Does value changed? */
-        if (src_addr && *(uintptr_t*)ptr.loc == ptr.val) {
-            
+        if (src_addr && *(uintptr_t*)ptr.loc == ptr.val) 
             report_dangling(ptr);
-    
-            status = 99;
-        }
 
         residuals->pop_front();
     }
@@ -292,8 +315,9 @@ inline void check_double_free(uintptr_t val) {
 #endif
 
     if (invalid) {
-        PRINTF("[HeapExpo] Double Free detected. Trying to free %x", val);
-        exit(98);
+        PRINTF(1, "[HeapExpo] Double Free detected. Trying to free %x", val);
+        status = 98;
+        exit(status);
     }
 }
 
@@ -344,8 +368,8 @@ inline uint32_t get_signature() {
     sig = hash_addr_list((uintptr_t*)array, cnt);
     SLOCK(sig_mutex);
     if (sig2dbg->find(sig) == sig2dbg->end()) {
-        PRINTF("SIG[%08x][%d]:\n", sig, cnt);
-        if (debug_mode == 1)
+        PRINTF(2, "SIG[%08x][%d]:\n", sig, cnt);
+        if (print_mode >= 2)
             backtrace_symbols_fd(array, cnt, fdcopy);
         SUNLOCK(sig_mutex);
         LOCK(sig_mutex);
@@ -366,7 +390,7 @@ inline void alloc_hook_(uintptr_t ptr, size_t size, uint32_t sig) {
 EXT_C void alloc_hook(char* ptr_, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
-    PRINTF("[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
+    PRINTF(3, "[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
     if (ptr) {
         uint32_t sig = get_signature();
         LOCK(obj_mutex);
@@ -389,14 +413,15 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     he_unordered_set<uintptr_t> labels = {};
 #endif
 
-    PRINTF("[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
-    
+    PRINTF(3, "[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
+
+    rtype tmp; 
     /* Invalidate ptrs that point to this heap object */
     SLOCK(moit->second.in_mutex);
     for (uintptr_t ptr_loc: moit->second.in_edges) {
         auto it = ptr_record->find(ptr_loc);
         if (it == ptr_record->end()) {
-            PRINTF("Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
+            PRINTF(3, "Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
             assert(false && "cannot find ptr in ptr_record");
             continue;
         }
@@ -409,10 +434,10 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
             struct object_info_t *src_obj_info = it->second.src_info;
 
-            PRINTF("PTR[%016lx] has unknown behavior\n", ptr_loc);
-            PRINTF("Record: value: %016lx src_obj:%016lx dst_obj:%016lx\n",
+            PRINTF(3, "PTR[%016lx] has unknown behavior\n", ptr_loc);
+            PRINTF(3, "Record: value: %016lx src_obj:%016lx dst_obj:%016lx\n",
                     it->second.value, it->second.src_obj, it->second.dst_obj);
-            PRINTF("Current value: %016lx\n", cur_val);
+            PRINTF(3, "Current value: %016lx\n", cur_val);
             if (!src_obj_info->out_edges.erase(ptr_loc)) 
                 assert(false &&"smoit incongruence");
             ptr_record->erase(it);
@@ -428,8 +453,8 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 #else
             *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
 #endif
-        PRINTF("[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
-        residuals->push_back(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
+        PRINTF(3, "[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
+        tmp.push_back(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
                     it->second.src_info->signature, it->second.dst_info->signature,
                     free_sig, it->second.id, counter));
 
@@ -440,6 +465,12 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
         it->second.invalid = true;
     }
+
+    for (auto &p: tmp) {
+        p.adj_cnt -= tmp.size();
+    }
+    residuals->merge(tmp, cntcmp);
+
     SUNLOCK(moit->second.in_mutex);
     LOCK(moit->second.in_mutex);
     moit->second.in_edges.clear();
@@ -448,7 +479,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     /* Erase ptrs in this heap object */
     for (uintptr_t ptr_loc: moit->second.out_edges) {
         auto it = ptr_record->find(ptr_loc);
-        PRINTF("[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, moit->first);
+        PRINTF(3, "[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, moit->first);
         assert(it != ptr_record->end());
         if (!it->second.invalid) {
             struct object_info_t *dst_obj_info = it->second.dst_info;
@@ -459,7 +490,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
             UNLOCK(dst_obj_info->in_mutex);
         }
         else {
-            PRINTF("[HeapExpo][remove_invalid]: ptr_loc:%016lx\n", ptr_loc);
+            PRINTF(3, "[HeapExpo][remove_invalid]: ptr_loc:%016lx\n", ptr_loc);
             remove_from_residuals(ptr_loc);
         }
             
@@ -473,7 +504,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
    
 #ifdef AFL
     uint16_t offset = hash<uint32_t>()(sig) & 0xfff;
-    PRINTF("[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
+    PRINTF(3, "[HeapExpo][bitmap]: offset:%04lx, n:%d\n", offset, labels.size());
     __heap_expo_ptr[offset] |= (1 << labels.size());
 #endif
 }
@@ -482,13 +513,13 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 EXT_C void dealloc_hook(char* ptr_) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)ptr_;
-    PRINTF("[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
+    PRINTF(3, "[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
     if (ptr) {
         uint32_t sig = get_signature();
         check_double_free(ptr);
         LOCK(obj_mutex);
         LOCK(ptr_mutex);
-        dealloc_hook_(ptr, sig, true);
+        dealloc_hook_(ptr, sig, invalidate_mode>1 );
         UNLOCK(ptr_mutex);
         UNLOCK(obj_mutex);
     }
@@ -502,13 +533,12 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
      * Case 2: work as dealloc (sometimes this is the case)
      * Case 3: Alloc, Copy ptrs to new home, Dealloc
      */
-    bool inval_in_ptrs = true;
     if (!he_initialized) return;
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
     size_t offset = newptr - oldptr;
     uint32_t sig = get_signature();
-    PRINTF("[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
+    PRINTF(3, "[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     LOCK(obj_mutex);
     if (offset == 0) {
         memory_objects->at(newptr).size = newsize;
@@ -538,7 +568,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
              * Must be checked before dereference the addr
              */
             if (ptr_loc >= oldptr + newsize) {
-                PRINTF("PTR[%016lx] is discarded while realloc to a smaller area\n", ptr_loc);
+                PRINTF(3, "PTR[%016lx] is discarded while realloc to a smaller area\n", ptr_loc);
                 if (!it->second.invalid) {
                     LOCK(it->second.dst_info->in_mutex);
                     it->second.dst_info->in_edges.erase(ptr_loc);
@@ -555,7 +585,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
 
             /* If value changed, we don't move this ptr */
             if (!it->second.invalid && cur_val != it->second.value) {
-                PRINTF("PTR[%016lx] value has changed\n", ptr_loc);
+                PRINTF(3, "PTR[%016lx] value has changed\n", ptr_loc);
                 LOCK(it->second.dst_info->in_mutex);
                 it->second.dst_info->in_edges.erase(ptr_loc);
                 UNLOCK(it->second.dst_info->in_mutex);
@@ -564,7 +594,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
             }
 
 
-            PRINTF("MOVING %s PTR[%016lx] to %016lx, OFFSET:%016lx\n", 
+            PRINTF(3, "MOVING %s PTR[%016lx] to %016lx, OFFSET:%016lx\n", 
                     it->second.invalid? "INVALID": "",
                     ptr_loc, ptr_loc+offset, offset);
 
@@ -597,18 +627,9 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
         }
         memory_objects->at(oldptr).out_edges.clear();
 
-        /* 
-         * A fix for duktape
-         * If there is only one old copy left in memory, we left it as is,
-         * so ptr offset arithmetic can work 
-         */
-        /*
-        if (memory_objects->at(oldptr).in_edges.size() == 1)
-            inval_in_ptrs = false;
-        */
     }
     if (oldptr)
-        dealloc_hook_(oldptr, sig, inval_in_ptrs);
+        dealloc_hook_(oldptr, sig, invalidate_mode > 2);
 
     UNLOCK(ptr_mutex);
     UNLOCK(obj_mutex);
@@ -640,7 +661,7 @@ inline void deregptr_dst(he_unordered_map<uintptr_t, struct pointer_info_t>::ite
         assert(it->second.dst_info && "dst_obj in_edges not cleared");
         LOCK(it->second.dst_info->in_mutex);
         if (! it->second.dst_info->in_edges.erase(it->first)) {
-            PRINTF("dst_obj: loc:%016lx\n", it->second.dst_obj);
+            PRINTF(3, "dst_obj: loc:%016lx\n", it->second.dst_obj);
             assert (false && "deregptr in edge problem");
         }
         UNLOCK(it->second.dst_info->in_mutex);
@@ -652,7 +673,7 @@ inline void deregptr_src(he_unordered_map<uintptr_t, struct pointer_info_t>::ite
     /* Remove ptr from src_obj's out_edges */
     assert( it->second.src_info && "src_obj out_edges not cleared");
     if (! it->second.src_info->out_edges.erase(it->first)) {
-        PRINTF("src_obj: loc:%016lx\n", it->second.src_obj);
+        PRINTF(3, "src_obj: loc:%016lx\n", it->second.src_obj);
         assert (false && "deregptr out edge problem");
     }
 }
@@ -712,7 +733,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
 
     get_object_addr(ptr_val, obj_addr, obj_info);
     get_object_addr(ptr_loc, ptr_obj_addr, ptr_obj_info);
-    PRINTF("[HeapExpo][regptr]: loc:%016lx val:%016lx\n[HeapExpo][regptr]: %016lx -> %016lx\n", ptr_loc, ptr_val, ptr_obj_addr, obj_addr);
+    PRINTF(3, "[HeapExpo][regptr]: loc:%016lx val:%016lx\n[HeapExpo][regptr]: %016lx -> %016lx\n", ptr_loc, ptr_val, ptr_obj_addr, obj_addr);
 
     check_residuals();
     
@@ -749,7 +770,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
 EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
 
-    PRINTF("[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);
+    PRINTF(3, "[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);
     check_residuals();
     SLOCK(obj_mutex);
     deregptr_(ptr_loc, false);
