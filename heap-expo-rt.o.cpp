@@ -158,8 +158,6 @@ void __heap_expo_shm() {
 
         if (__heap_expo_ptr == (void*)-1) exit(1);
 
-        memset(__heap_expo_ptr, 0x0, HE_MAP_SIZE);
-    
         __heap_expo_ptr[0] = 1;
 
     }
@@ -248,10 +246,9 @@ void __attribute__((destructor (0))) exit_with_code(void) {
 inline void report_dangling(residual_pointer_t &ptr) {
 
     PRINTF(2, "[HeapExpo][Dangling]: loc[%016lx], val[%016lx], src_sig[%08x], "
-           "dst_sig[%08x], store_id[%08x], free_sig[%08x], counter_diff[%u]\n"
-           "counter[%u], adj_counter[%u]" , 
+           "dst_sig[%08x], store_id[%08x], free_sig[%08x], counter_diff[%u]\n",
             ptr.loc, ptr.val, ptr.src_sig, ptr.dst_sig, ptr.store_id,
-            ptr.free_sig, counter - ptr.counter, ptr.counter, ptr.adj_cnt);
+            ptr.free_sig, counter - ptr.counter);
 
     status = 99;
 
@@ -264,8 +261,9 @@ inline void report_dangling(residual_pointer_t &ptr) {
 
 inline void check_residuals() {
 
-    if (!residuals) 
+    if (!residuals) {
         INT_MALLOC(residuals, rtype);
+    }
 
     while (!residuals->empty() &&
             residuals->front().adj_cnt <= counter - residual_live_limit) {
@@ -440,8 +438,9 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     for (auto &p: tmp) 
         p.adj_cnt += tmp.size();
 
-    if (!residuals)
+    if (!residuals) {
         INT_MALLOC(residuals, rtype);
+    }
 
     residuals->merge(tmp, cntcmp);
 
