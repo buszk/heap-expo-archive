@@ -50,6 +50,8 @@ extern "C" {
     void dealloc_hook(char* addr);
     void realloc_hook(char* old_addr, char* new_addr, size_t new_size);
 
+    void check_double_free(void*);
+
     void *__libc_malloc(size_t);
     void __libc_free(void*);
     void *__libc_calloc(size_t, size_t);
@@ -117,9 +119,11 @@ struct object_info_t {
     uint32_t                    signature ;
     he_unordered_set<uintptr_t> in_edges  ;
     he_unordered_set<uintptr_t> out_edges ;
+    he_unordered_map<uintptr_t, uint32_t> stack_edges ;
 #ifdef MULTITHREADING
     std::shared_mutex           in_mutex  ;
     std::shared_mutex           out_mutex ;
+    std::shared_mutex           stack_mutex ;
 #endif
     
     object_info_t () {
@@ -128,6 +132,7 @@ struct object_info_t {
         signature = 0;
         in_edges = {};
         out_edges = {};
+        stack_edges = {};
     }
 
     object_info_t (size_t s) {
@@ -136,6 +141,7 @@ struct object_info_t {
         signature = 0;
         in_edges = {};
         out_edges = {};
+        stack_edges = {};
     }
 
     /* For global_hook */
@@ -144,6 +150,7 @@ struct object_info_t {
         type = t;
         in_edges = {};
         out_edges = {};
+        stack_edges = {};
     }
 
     /* For alloc_hook */
@@ -153,6 +160,7 @@ struct object_info_t {
         signature = sig;
         in_edges = {};
         out_edges = {};
+        stack_edges = {};
     }
     
     object_info_t (const object_info_t &copy) {
@@ -231,4 +239,14 @@ struct residual_pointer_t {
 bool cntcmp(residual_pointer_t a, residual_pointer_t b) {
     return a.adj_cnt < b.adj_cnt;
 }
+
+struct stack_pointer_t {
+    uintptr_t     loc      ;
+    uint32_t      store_id ;
+
+    stack_pointer_t (uintptr_t l, uint32_t id) {
+        loc = l;
+        id = store_id;
+    }
+};
 #endif

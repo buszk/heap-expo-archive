@@ -283,7 +283,10 @@ inline void check_residuals() {
 
 }
 
-inline void check_double_free(uintptr_t val) {
+EXT_C void check_double_free(void *val_) {
+
+    uintptr_t val = (uintptr_t)val_;
+
     bool invalid;
 #ifdef __x86_64__
     invalid = !!(val & 0xffff800000000000);
@@ -444,6 +447,41 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
     residuals->merge(tmp, cntcmp);
 
+
+    /* Process ptrs on stack */
+
+    uintptr_t sp;
+#ifdef __x86_64__
+    asm("\t movq %%rsp,%0" : "=r"(sp));
+#else
+    asm("\t movl %%esp,%0" : "=r"(sp));
+#endif
+
+    for (auto const& x: moit->second.stack_edges) {
+
+        uintptr_t ptr_loc = x.first;
+        uint32_t  id = x.second;
+
+        uintptr_t cur_val = *(uintptr_t*)ptr_loc;
+
+        /* The pointer is below current free in stack */
+        if (ptr_loc < sp) {
+            continue;
+        }
+
+        if (cur_val >= moit->first && cur_val < moit->first + moit->second.size) {
+            if (invalidate)
+#if __x86_64__
+                *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
+#else
+                *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
+#endif
+            PRINTF(3, "[HeapExpo][stack_invalidate]: ptr_loc:%016lx value:%016lx store_id:%08x\n", ptr_loc, cur_val, id);
+
+        }
+    }
+
+
     SUNLOCK(moit->second.in_mutex);
     LOCK(moit->second.in_mutex);
     moit->second.in_edges.clear();
@@ -484,7 +522,6 @@ EXT_C void dealloc_hook(char* ptr_) {
     PRINTF(3, "[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
     if (ptr) {
         uint32_t sig = get_signature();
-        check_double_free(ptr);
         LOCK(obj_mutex);
         LOCK(ptr_mutex);
         dealloc_hook_(ptr, sig, invalidate_mode>1 );
@@ -732,6 +769,17 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
             UNLOCK(ptr_mutex);
         }
     }
+
+    /* 
+     * Only the object in recorded heap
+     * Ptr may locate on the stack
+     */
+    if (obj_addr && !ptr_obj_addr ) {
+        LOCK(obj_info->stack_mutex);
+        obj_info->stack_edges.insert(make_pair<>(ptr_loc, id));
+        UNLOCK(obj_info->stack_mutex);
+    }
+
     SUNLOCK(obj_mutex);
 }
 

@@ -365,7 +365,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
                         /* Don't instr if storing to stack */
                         if (isStackPtr(SI->getPointerOperand())) {
                             stack_store_instr_cnt++;
-                            continue;
+                            //continue;
                         }
 
                         //if (isConstantGlobalPtr(SI->getValueOperand())) 
