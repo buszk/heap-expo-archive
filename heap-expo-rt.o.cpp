@@ -526,7 +526,7 @@ EXT_C void dealloc_hook(char* ptr_) {
         if (print_mode > 1)
             sig = get_signature();
 
-        check_double_free(ptr);
+        check_double_free((void*)ptr);
 
         LOCK(obj_mutex);
         LOCK(ptr_mutex);

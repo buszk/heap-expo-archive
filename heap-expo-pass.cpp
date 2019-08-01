@@ -442,8 +442,13 @@ static RegisterPass<HeapExpoFuncTracker> Y("HeapExpoFunc", "HeapExpo Function Pa
 
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
-    PM.add(new HeapExpoFuncTracker());
     PM.add(new HeapExpoGlobalTracker());
+}
+
+static void registerMyPassLate(const PassManagerBuilder &,
+        legacy::PassManagerBase &PM) {
+    PM.add(new HeapExpoFuncTracker());
+
 }
 
 static RegisterStandardPasses
@@ -453,3 +458,12 @@ static RegisterStandardPasses
 static RegisterStandardPasses
     RegisterMyPass0(PassManagerBuilder::EP_EnabledOnOptLevel0,
             registerMyPass);
+
+static RegisterStandardPasses
+    RegisterMyPassLate(PassManagerBuilder::EP_EarlyAsPossible,
+            registerMyPassLate);
+/*
+static RegisterStandardPasses
+    RegisterMyPassLate0(PassManagerBuilder::EP_EnabledOnOptLevel0,
+            registerMyPassLate);
+            */

@@ -31,4 +31,6 @@ int main(int argc, char **argv) {
     buf3 = (char *) malloc(BUFSIZE);
     char c = *buf2;
 
+    printf("%c\n", c);
+
 }
