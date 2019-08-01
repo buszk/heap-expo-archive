@@ -53,6 +53,9 @@ ESP_ST motype *memory_objects;
 using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
 ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr 
 
+using sptype = he_set<uintptr_t>;
+ESP_ST thread_local sptype *stack_record = NULL;
+
 using rtype = he_list<residual_pointer_t>;
 ESP_ST thread_local rtype *residuals = NULL;
 ESP_ST thread_local int64_t counter = 0;
@@ -469,7 +472,11 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         if (ptr_loc < sp) {
             continue;
         }
-
+/*
+        if (!stack_record || stack_record->find(ptr_loc) == stack_record->end())  {
+            continue;
+        }
+*/
         if (cur_val >= moit->first && cur_val < moit->first + moit->second.size) {
             if (invalidate)
 #if __x86_64__
@@ -786,6 +793,10 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
         LOCK(obj_info->stack_mutex);
         obj_info->stack_edges.insert(make_pair<>(ptr_loc, id));
         UNLOCK(obj_info->stack_mutex);
+        if (!stack_record) {
+            INT_MALLOC(stack_record, sptype);
+        }
+        stack_record->insert(ptr_loc);
     }
 
     SUNLOCK(obj_mutex);
@@ -800,6 +811,23 @@ EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
     deregptr_(ptr_loc, false);
     SUNLOCK(obj_mutex);
 
+}
+
+EXT_C void voidcallstack() {
+
+    uintptr_t sp;
+
+#ifdef __x86_64__
+    asm("\t movq %%rsp,%0" : "=r"(sp));
+#else
+    asm("\t movl %%esp,%0" : "=r"(sp));
+#endif
+
+    if (!stack_record) 
+        return;
+
+    auto it = stack_record->lower_bound(sp);
+    stack_record->erase(stack_record->begin(), it);
 }
 
 #undef PRINTF

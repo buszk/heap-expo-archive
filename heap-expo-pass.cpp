@@ -238,6 +238,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     bool initialized;
     Module *M;
     Function *regptr, *deregptr;
+    Function *voidcallstack;
     Function *func;
     size_t store_instr_cnt = 0;
     size_t stack_store_instr_cnt = 0;
@@ -331,6 +332,18 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         logID(DLoc, cur_call);
     }
 
+    void instrVoid(CallInst *CI) {
+        
+        DebugLoc DLoc = CI->getDebugLoc();
+        if (!DLoc)
+            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+
+        CallInst *voidcallstack_call = CallInst::Create(voidcallstack, {}, "");
+        voidcallstack_call->insertAfter(CI);
+        voidcallstack_call->setDebugLoc(DLoc);
+
+    }
+
     virtual bool runOnFunction(Function &F) {
 
         LOG(LVL_DEBUG) << "HeapExpo: ";
@@ -384,6 +397,23 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
                 }
             }
+            else if (isa<CallInst> (I)) {
+
+                CallInst *CI = dyn_cast<CallInst> (I);
+
+                Function *F = CI->getCalledFunction();
+
+                if (F) {
+
+                    StringRef fname = F->getName();
+                    if (fname == "regptr" || fname == "deregptr" ||
+                        fname == "voidcallstack")
+                        continue;
+
+                    instrVoid(CI);
+
+                }
+            }
         }
         return false;
 
@@ -398,6 +428,10 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
         regptr = cast<Function>(regptr_def);
         regptr->setCallingConv(CallingConv::C);
+        
+        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M));
+        voidcallstack = cast<Function>(voidcallstack_def);
+        voidcallstack->setCallingConv(CallingConv::C);
 
         struct timeval time;
         gettimeofday(&time, NULL);
@@ -445,11 +479,15 @@ static void registerMyPass(const PassManagerBuilder &,
     PM.add(new HeapExpoGlobalTracker());
 }
 
-static void registerMyPassLate(const PassManagerBuilder &,
+static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoFuncTracker());
 
 }
+
+static RegisterStandardPasses
+    RegisterMyPassEarly(PassManagerBuilder::EP_EarlyAsPossible,
+            registerMyPassEarly);
 
 static RegisterStandardPasses
     RegisterMyPass(PassManagerBuilder::EP_OptimizerLast,
@@ -458,12 +496,8 @@ static RegisterStandardPasses
 static RegisterStandardPasses
     RegisterMyPass0(PassManagerBuilder::EP_EnabledOnOptLevel0,
             registerMyPass);
-
-static RegisterStandardPasses
-    RegisterMyPassLate(PassManagerBuilder::EP_EarlyAsPossible,
-            registerMyPassLate);
 /*
 static RegisterStandardPasses
-    RegisterMyPassLate0(PassManagerBuilder::EP_EnabledOnOptLevel0,
-            registerMyPassLate);
+    RegisterMyPassEarly0(PassManagerBuilder::EP_EnabledOnOptLevel0,
+            registerMyPassEarly);
             */
