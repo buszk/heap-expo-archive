@@ -15,11 +15,6 @@
 #include <libunwind-x86.h>
 #endif
 
-#define AFL
-#ifdef AFL
-#include "afl-include.h"
-#endif
-
 #include "rt-include.h"
 #include "rt-malloc.h"
 #include "hash.h"
@@ -41,7 +36,10 @@
 
 using namespace std;
 
+#define AFL
+
 #ifdef AFL
+#include "afl-include.h"
 #include <fstream>
 #include <sys/shm.h>
 ESP_ST char  __heap_expo_initial[HE_MAP_SIZE];
@@ -92,7 +90,7 @@ ESP_ST int print_mode = 0;
 #endif
 
 #if DEBUG_LVL >= 1
-void __printf(int lvl, const char * format, ...) {
+inline void __printf(int lvl, const char * format, ...) {
 #if DEBUG_LVL == 1
     if (print_mode < lvl) return;
 #endif
@@ -139,10 +137,10 @@ void print_edges() {
 }
 
 EXT_C void print_heap() {
-#if DEBUG_LVL > 1
+
     print_memory_objects();
     print_edges();
-#endif
+
 }
 
         
@@ -225,7 +223,7 @@ void __attribute__((constructor (1))) init_rt(void) {
 
 void __attribute__((destructor (65535))) fini_rt(void) {
 
-    print_heap();
+    //print_heap();
 
     /* 
      * These frees may cause double free. 
@@ -373,7 +371,10 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF(3, "[HeapExpo][alloc]: ptr:%016lx size:%016lx\n", ptr, size);
     if (ptr) {
-        uint32_t sig = get_signature();
+
+        uint32_t sig = 0;
+        if (print_mode > 1)
+            sig = get_signature();
         LOCK(obj_mutex);
         alloc_hook_(ptr, size, sig);
         UNLOCK(obj_mutex);
@@ -521,7 +522,12 @@ EXT_C void dealloc_hook(char* ptr_) {
     uintptr_t ptr = (uintptr_t)ptr_;
     PRINTF(3, "[HeapExpo][dealloc]: ptr:%016lx\n", ptr);
     if (ptr) {
-        uint32_t sig = get_signature();
+        uint32_t sig = 0;
+        if (print_mode > 1)
+            sig = get_signature();
+
+        check_double_free(ptr);
+
         LOCK(obj_mutex);
         LOCK(ptr_mutex);
         dealloc_hook_(ptr, sig, invalidate_mode>1 );
@@ -542,7 +548,9 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     uintptr_t oldptr = (uintptr_t)oldptr_;
     uintptr_t newptr = (uintptr_t)newptr_;
     size_t offset = newptr - oldptr;
-    uint32_t sig = get_signature();
+    uint32_t sig = 0;
+    if (print_mode > 1)
+        get_signature();
     PRINTF(3, "[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     LOCK(obj_mutex);
     if (offset == 0) {

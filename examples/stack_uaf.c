@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define BUFSIZE   512
     
@@ -17,5 +18,7 @@ int main(int argc, char **argv) {
 
     buf3 = (char *) malloc(BUFSIZE);
     char c = *buf2;
+
+    printf("%c\n", c);
 
 }
