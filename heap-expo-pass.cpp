@@ -56,6 +56,7 @@ static ArrayType* getCtorTy(Module *M, int num) {
 static Constant* getCtorStruct(Module *M, Function *F) {
     
     SmallVector<Constant *, 10> SList;
+    /* Ctor priority */
     SList.push_back(ConstantInt::get(Int32Ty(M), 2));
     SList.push_back(F);
     SList.push_back(ConstantPointerNull::get(Int8PtrTy(M)));
