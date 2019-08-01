@@ -237,7 +237,7 @@ void __attribute__((destructor (65535))) fini_rt(void) {
 void __attribute__((destructor (0))) exit_with_code(void) {
 
     /* Quiet configure scripts that may use exist status */ 
-    if (status) exit(status);
+    if (status && !getenv("HEXPO_BUILD")) exit(status);
 
 }
 
