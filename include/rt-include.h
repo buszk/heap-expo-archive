@@ -23,6 +23,12 @@
 #define INT_MALLOC(ptr, type) \
     ptr = (type*)__malloc(sizeof(type)); \
     new(ptr) type
+
+#if __x86_64__
+#define KADDR 0xffff800000000000
+#else
+#define KADDR 0xc0000000
+#endif
     
 
 #ifdef MULTITHREADING

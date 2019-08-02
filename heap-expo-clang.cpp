@@ -137,7 +137,8 @@ int main(int argc, char** argv) {
         else 
             params.push_back(cur);
 #else 
-        params.push_back(cur);
+        if (cur != "-flto")
+            params.push_back(cur);
 #endif
     }
 

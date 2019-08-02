@@ -9,6 +9,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Analysis/CFG.h"
 
 #include "llvm-include.h"
 
@@ -23,6 +24,7 @@
 #include <unistd.h>
 
 #include <vector>
+#include <set>
 
 #define LVL_ERROR   1
 #define LVL_WARNING 2
@@ -133,20 +135,6 @@ static void addToGlobalCtors(Module *M, Function* F) {
         
 }
 
-static bool isStackPtr(Value *V) {
-    if (!isa<User>(V))
-        return false;
-
-    User *U = (User*)V;
-
-    if (isa<AllocaInst>(U)) {
-        return true;
-    }
-    else if (isa<BinaryOperator>(U)) {
-        return isStackPtr(U->getOperand(0)) || isStackPtr(U->getOperand(1));
-    }
-    return false;
-}
 /*
 static bool isConstantGlobalPtr(Value *V) {
     if (!isa<User>(V))
@@ -238,15 +226,32 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     bool initialized;
     Module *M;
     Function *regptr, *deregptr;
-    Function *voidcallstack;
+    Function *voidcallstack, *checkstackvar;
     Function *func;
     size_t store_instr_cnt = 0;
     size_t stack_store_instr_cnt = 0;
     size_t store_const_global_cnt = 0;
     int fd;
+    std::set<Value*> stack_ptrs;
 
     HeapExpoFuncTracker() : FunctionPass(ID) {
         initialized = false;
+    }
+
+    bool isStackPtr(Value *V) {
+        if (!isa<User>(V))
+            return false;
+
+        User *U = (User*)V;
+
+        if (isa<AllocaInst>(U)) {
+            stack_ptrs.insert(V);
+            return true;
+        }
+        else if (isa<BinaryOperator>(U)) {
+            return isStackPtr(U->getOperand(0)) || isStackPtr(U->getOperand(1));
+        }
+        return false;
     }
 
     void logID(DebugLoc DLoc, uint32_t cur_call) {
@@ -342,6 +347,90 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         voidcallstack_call->insertAfter(CI);
         voidcallstack_call->setDebugLoc(DLoc);
 
+
+        uint32_t cur_call = rand() & 0xffffffff;
+        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
+        bool instr = false;
+
+        /* Instrument stack dangling ptr check */
+        for (Value *V : stack_ptrs) {
+            bool reachable = false;
+            for (User *U: V->users()) {
+                Instruction *I = dyn_cast<Instruction> (U);
+                if (I) {
+                    /* This stack value is being written in I */
+                    if (isa<StoreInst>(I))
+                        continue;
+
+                    /* In some llvm call */
+                    if (isa<CallInst>(I)) {
+                        CallInst *ci = dyn_cast<CallInst>(I);
+                        if (ci->getCalledFunction()) {
+                            if (ci->getCalledFunction()->getName().find("llvm") == 0) {
+                                continue;
+                            }
+                        }
+                    }
+                    else if (isa<CastInst>(I)) {
+
+                        CastInst *cast = dyn_cast<CastInst> (I);
+                        
+                        /* Likely repgptr, deregptr, llvm instrinsic calls */
+                        if (cast->getDestTy() == Int8PtrTy(M) && I->hasOneUse()) {
+                            continue;
+                        }
+
+                        /*
+                        if (I->hasOneUse()) {
+                            User *u = *I->user_begin();
+                            if (isa<CallInst>(u)) {
+                                CallInst *ci = dyn_cast<CallInst>(u);
+                                if (ci->getCalledFunction()) {
+                                    LOG(LVL_DEBUG) << ci->getCalledFunction()->getName() << "\n";
+                                    if (ci->getCalledFunction()->getName().find("llvm") == 0) {
+                                        continue;
+                                    }
+                                }
+                
+                            }
+                        }
+                        */
+                    }
+
+                    if (isPotentiallyReachable(CI, I)) {
+                        LOG(LVL_DEBUG) << "Stack var: " << *V << " used by inst: "
+                            << *I << "\n";
+                        //LOG(LVL_INFO) << *func << "\n";
+                        reachable = true;
+                    }
+
+                }
+                if (reachable) {
+                    CastInst *cast_loc =
+                        CastInst::CreatePointerCast(V, Int8PtrTy(M));
+                    std::vector <Value*> Args;
+                    Args.push_back(cast_loc);
+                    Args.push_back(CurCall);
+                    CallInst *checkstackvar_call = CallInst::Create(checkstackvar, Args, "");
+                    cast_loc->insertAfter(voidcallstack_call);
+                    cast_loc->setDebugLoc(DLoc);
+                    LOG(LVL_DEBUG) << "checkstackvar\n";
+                    checkstackvar_call->insertAfter(cast_loc);
+                    checkstackvar_call->setDebugLoc(DLoc);
+                    /*
+                    CallInst *checkstackvar_call = CallInst::Create(checkstackvar, {cast_loc}, "");
+                    checkstackvar_call->insertAfter(CI);
+                    checkstackvar_call->setDebugLoc(DLoc);
+                    */
+                    instr = true;
+                    break;
+
+                }
+            }
+        }
+        if (instr)
+            logID(DLoc, cur_call);
+
     }
 
     virtual bool runOnFunction(Function &F) {
@@ -353,6 +442,8 @@ struct HeapExpoFuncTracker : public FunctionPass  {
             M = F.getParent();
             initialized = false;
         }
+
+        stack_ptrs.clear();
 
         if (!initialized) 
             initialize(M);
@@ -401,18 +492,21 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
                 CallInst *CI = dyn_cast<CallInst> (I);
 
+                if (!CI) continue;
+
                 Function *F = CI->getCalledFunction();
+                if (!F) continue;
 
-                if (F) {
 
-                    StringRef fname = F->getName();
-                    if (fname == "regptr" || fname == "deregptr" ||
-                        fname == "voidcallstack")
-                        continue;
+                StringRef fname = F->getName();
+                if (fname == "regptr" || fname == "deregptr" ||
+                    fname == "voidcallstack" || fname == "checkstackvar"||
+                    fname.find("llvm.") == 0 || fname.find("clang") == 0)
+                    continue;
 
-                    instrVoid(CI);
+                instrVoid(CI);
+                LOG(LVL_DEBUG) << "Void: "<< *CI << "\n";
 
-                }
             }
         }
         return false;
@@ -429,9 +523,14 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         regptr = cast<Function>(regptr_def);
         regptr->setCallingConv(CallingConv::C);
         
-        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M));
+        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M), Int8PtrTy(M));
         voidcallstack = cast<Function>(voidcallstack_def);
         voidcallstack->setCallingConv(CallingConv::C);
+
+        //Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32PtrTy(M));
+        Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M));
+        checkstackvar = cast<Function>(checkstackvar_def);
+        checkstackvar->setCallingConv(CallingConv::C);
 
         struct timeval time;
         gettimeofday(&time, NULL);

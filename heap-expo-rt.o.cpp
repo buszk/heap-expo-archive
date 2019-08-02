@@ -55,6 +55,8 @@ ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr
 
 using sptype = he_set<uintptr_t>;
 ESP_ST thread_local sptype *stack_record = NULL;
+using irtype = he_map<uintptr_t, uint32_t>;
+ESP_ST thread_local irtype *inval_record = NULL;
 
 using rtype = he_list<residual_pointer_t>;
 ESP_ST thread_local rtype *residuals = NULL;
@@ -163,6 +165,10 @@ void __heap_expo_shm() {
 
     }
     
+}
+
+inline bool is_invalid(uintptr_t addr) {
+    return ((addr & KADDR) == KADDR);
 }
 
 
@@ -288,14 +294,7 @@ EXT_C void check_double_free(void *val_) {
 
     uintptr_t val = (uintptr_t)val_;
 
-    bool invalid;
-#ifdef __x86_64__
-    invalid = !!(val & 0xffff800000000000);
-#else 
-    invalid = !!(val & 0xc0000000);
-#endif
-
-    if (invalid) {
+    if (is_invalid(val)) {
         PRINTF(1, "[HeapExpo] Double Free detected. Trying to free %x", val);
         status = 98;
         exit(status);
@@ -429,11 +428,8 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         
         /* Value did not change, set it to kernel space */
         if (invalidate)
-#if __x86_64__
-            *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
-#else
-            *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
-#endif
+            *(uintptr_t*)ptr_loc = cur_val | KADDR; 
+
         PRINTF(3, "[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
         tmp.push_back(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
                     it->second.src_info->signature, it->second.dst_info->signature,
@@ -478,13 +474,15 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         }
 */
         if (cur_val >= moit->first && cur_val < moit->first + moit->second.size) {
-            if (invalidate)
-#if __x86_64__
-                *(uintptr_t*)ptr_loc = cur_val | 0xffff800000000000; 
-#else
-                *(uintptr_t*)ptr_loc = cur_val | 0xc0000000;
-#endif
+            if (invalidate_mode > 1)
+                *(uintptr_t*)ptr_loc = cur_val | KADDR; 
+            
             PRINTF(3, "[HeapExpo][stack_invalidate]: ptr_loc:%016lx value:%016lx store_id:%08x\n", ptr_loc, cur_val, id);
+        
+            if (!inval_record) {
+                INT_MALLOC(inval_record, irtype);
+            }
+            inval_record->insert(make_pair<>(ptr_loc, id));
 
         }
     }
@@ -823,11 +821,37 @@ EXT_C void voidcallstack() {
     asm("\t movl %%esp,%0" : "=r"(sp));
 #endif
 
-    if (!stack_record) 
-        return;
+    if (stack_record)  {
+        auto it = stack_record->lower_bound(sp + 0x10);
+        stack_record->erase(stack_record->begin(), it);
+    }
 
-    auto it = stack_record->lower_bound(sp);
-    stack_record->erase(stack_record->begin(), it);
+    if (inval_record) {
+        auto it2 = inval_record->lower_bound(sp + 0x10);
+        inval_record->erase(inval_record->begin(), it2);
+    }
+
+}
+
+EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
+
+    uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
+    uintptr_t cur_val = *(uintptr_t*)ptr_loc;
+
+    if (is_invalid(cur_val)) {
+
+        if (!inval_record) return;
+
+        auto it = inval_record->find(ptr_loc);
+        if (it == inval_record->end()) return;
+        
+        uint32_t store_id = it->second;
+
+        PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx]\n", 
+                ptr_loc, id, store_id);
+
+    }
+    
 }
 
 #undef PRINTF
