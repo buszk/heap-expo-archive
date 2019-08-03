@@ -265,7 +265,7 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> *Uses, s
         else if (!found_src && in_set(I, Defs))
             def_in_block = true;
         else if (!found_src && in_set(I, Uses) && def_in_block)
-            remove_set(I, Uses);
+            {}//remove_set(I, Uses);
         else if (!found_src && in_set(I, Uses) && !def_in_block) 
             to_parent = true;
     }
