@@ -25,6 +25,7 @@
 
 #include <vector>
 #include <set>
+#include <algorithm>
 
 #define LVL_ERROR   1
 #define LVL_WARNING 2
@@ -221,6 +222,165 @@ struct HeapExpoGlobalTracker : public ModulePass {
 
 };
 
+static bool isPotentiallyDefed(Instruction *To, std::set<Instruction*> *Defs) {
+    for (Instruction *I : *Defs) 
+        if (isPotentiallyReachable(I, To))
+            return true;
+    return false;
+}
+
+static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> *Uses, std::set<Instruction*> *Defs) {
+    bool def_in_block = false;
+    bool found_src = false;
+    BasicBlock *p = (BasicBlock*)From->getParent();
+    
+    auto in_set = [](Instruction *I, std::set<Instruction*> *Set) {
+        if (Set)
+            return Set->find(I) != Set->end();
+        return false;
+    };
+
+    auto remove_set = [] (Instruction *I , std::set<Instruction*> *Set) {
+
+        if (Set)
+            Set->erase(Set->find(I));
+    };
+
+    std::set<BasicBlock*> ToBlocks;
+    std::set<BasicBlock*> AvoidBlocks;
+    std::set<BasicBlock*> IntersectBlock;
+    std::set<BasicBlock*> UseBlock;
+    std::set<BasicBlock*> DefBlock;
+
+    bool to_parent = false;
+
+    for (auto i = p->begin(); i != p->end(); i++) {
+        Instruction* I = (Instruction*) &*i;
+        if (I == From)
+            found_src = true;
+        else if (found_src && in_set(I, Defs)) 
+            return false;
+        else if (found_src && in_set(I, Uses)) 
+            return true;
+        else if (!found_src && in_set(I, Defs))
+            def_in_block = true;
+        else if (!found_src && in_set(I, Uses) && def_in_block)
+            remove_set(I, Uses);
+        else if (!found_src && in_set(I, Uses) && !def_in_block) 
+            to_parent = true;
+    }
+
+    if (Uses)
+        for (Instruction *I : *Uses) {
+            if (I->getParent() != p)
+                UseBlock.insert((BasicBlock*)I->getParent());
+        }
+    if (Defs)
+        for (Instruction *I : *Defs) {
+            if (I->getParent() != p)
+                DefBlock.insert((BasicBlock*)I->getParent());
+        }
+
+
+    auto diff_set = [] (std::set<BasicBlock*> &s1, std::set<BasicBlock*> &s2, 
+            std::set<BasicBlock*> &output) {
+        /*
+        std::set_difference(s1.begin(), s1.end(),
+                              s2.begin(), s2.end(),
+                              output.begin());
+                              */
+        for (BasicBlock *b : s1) 
+            if (s2.find(b) == s2.end()) 
+                output.insert(b);
+    };
+
+    diff_set(UseBlock, DefBlock, ToBlocks);
+    diff_set(DefBlock, UseBlock, AvoidBlocks);
+
+    auto inter_set = [] (std::set<BasicBlock*> &s1, std::set<BasicBlock*> &s2, 
+            std::set<BasicBlock*> &output) {
+        /*
+        std::set_intersection(s1.begin(), s1.end(),
+                              s2.begin(), s2.end(),
+                              output.begin());
+                              */
+        for (BasicBlock *b: s1)
+            if (s2.find(b) != s2.end())
+                output.insert(b);
+    };
+    inter_set (UseBlock, DefBlock, IntersectBlock);
+
+    for (const BasicBlock *BB : IntersectBlock) {
+        for (const Instruction &Ins : *BB) {
+            Instruction* I = (Instruction*)&Ins;
+            if (in_set(I, Uses)) {
+                ToBlocks.insert((BasicBlock*)BB);
+                break;
+            }
+            else if (in_set(I, Defs)) {
+                AvoidBlocks.insert((BasicBlock*)BB);
+                break;
+            }
+        }
+    }
+
+    std::vector<BasicBlock*> Reached;
+    std::set<BasicBlock*> WorkList;
+    WorkList.insert((BasicBlock*)p);
+/*
+    LOG(LVL_INFO) << "Defs\n";
+    for (Instruction* i : *Defs) {
+        LOG(LVL_INFO) << *i << "\n";
+    }
+    LOG(LVL_INFO) << "Avoid\n";
+    for (BasicBlock* b: AvoidBlocks) {
+        LOG(LVL_INFO) << *b << "\n";
+    }
+    LOG(LVL_INFO) << "Uses\n";
+    for (Instruction* i : *Uses) {
+        LOG(LVL_INFO) << *i << "\n";
+    }
+    LOG(LVL_INFO) << "To\n";
+    for (BasicBlock* b: ToBlocks) {
+        LOG(LVL_INFO) << *b << "\n";
+    }
+    */
+    while(!WorkList.empty()) {
+
+        BasicBlock *cur = *WorkList.begin();
+        WorkList.erase(cur);
+        Reached.push_back(cur);
+
+        for (auto it = succ_begin(cur); it != succ_end(cur); it++) {
+
+            BasicBlock *next = *it;
+            if (AvoidBlocks.find(next) == AvoidBlocks.end() &&
+                find(Reached.begin(), Reached.end(), next) == Reached.end())
+                WorkList.insert(next);
+ 
+            if (to_parent && next== (BasicBlock*)p) {
+                /*
+                LOG(LVL_INFO) << "source: "<< *From << "\ndst:" << *next << 
+                    "\ncur:" << *cur << "\n";
+                LOG(LVL_INFO) << "Reached\n";
+                for (BasicBlock* b : Reached) {
+                    LOG(LVL_INFO) << *b << "\n";
+                }
+                */
+
+
+                return true;
+            }
+
+            if (ToBlocks.find(next) != ToBlocks.end()) {
+                return true;
+            }
+        }
+    }
+    return false;
+
+}
+
 struct HeapExpoFuncTracker : public FunctionPass  {
     static char ID;
     bool initialized;
@@ -232,26 +392,33 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     size_t stack_store_instr_cnt = 0;
     size_t store_const_global_cnt = 0;
     int fd;
-    std::set<Value*> stack_ptrs;
+    
+    std::set<AllocaInst*> stack_ptrs;
+    std::set<CallInst*> calls_to_instr;
+    std::map<AllocaInst*, std::set<Instruction*>> defs;
+    std::map<AllocaInst*, std::set<Instruction*>> uses;
 
     HeapExpoFuncTracker() : FunctionPass(ID) {
         initialized = false;
     }
 
-    bool isStackPtr(Value *V) {
+    AllocaInst* isStackPtr(Value *V) {
         if (!isa<User>(V))
-            return false;
+            return NULL;
 
         User *U = (User*)V;
 
         if (isa<AllocaInst>(U)) {
-            stack_ptrs.insert(V);
-            return true;
+            return dyn_cast<AllocaInst>(U);
         }
         else if (isa<BinaryOperator>(U)) {
-            return isStackPtr(U->getOperand(0)) || isStackPtr(U->getOperand(1));
+            AllocaInst *ai;
+            ai = isStackPtr(U->getOperand(0));
+            if (ai) return ai;
+            ai = isStackPtr(U->getOperand(1));
+            if (ai) return ai;
         }
-        return false;
+        return NULL;
     }
 
     void logID(DebugLoc DLoc, uint32_t cur_call) {
@@ -348,88 +515,29 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         voidcallstack_call->setDebugLoc(DLoc);
 
 
-        uint32_t cur_call = rand() & 0xffffffff;
+
+    }
+    void instrCheck(CallInst *CI, AllocaInst *AI, uint32_t cur_call) {
+        
+        DebugLoc DLoc = CI->getDebugLoc();
+        if (!DLoc)
+            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+
         ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
-        bool instr = false;
 
-        /* Instrument stack dangling ptr check */
-        for (Value *V : stack_ptrs) {
-            bool reachable = false;
-            for (User *U: V->users()) {
-                Instruction *I = dyn_cast<Instruction> (U);
-                if (I) {
-                    /* This stack value is being written in I */
-                    if (isa<StoreInst>(I))
-                        continue;
-
-                    /* In some llvm call */
-                    if (isa<CallInst>(I)) {
-                        CallInst *ci = dyn_cast<CallInst>(I);
-                        if (ci->getCalledFunction()) {
-                            if (ci->getCalledFunction()->getName().find("llvm") == 0) {
-                                continue;
-                            }
-                        }
-                    }
-                    else if (isa<CastInst>(I)) {
-
-                        CastInst *cast = dyn_cast<CastInst> (I);
-                        
-                        /* Likely repgptr, deregptr, llvm instrinsic calls */
-                        if (cast->getDestTy() == Int8PtrTy(M) && I->hasOneUse()) {
-                            continue;
-                        }
-
-                        /*
-                        if (I->hasOneUse()) {
-                            User *u = *I->user_begin();
-                            if (isa<CallInst>(u)) {
-                                CallInst *ci = dyn_cast<CallInst>(u);
-                                if (ci->getCalledFunction()) {
-                                    LOG(LVL_DEBUG) << ci->getCalledFunction()->getName() << "\n";
-                                    if (ci->getCalledFunction()->getName().find("llvm") == 0) {
-                                        continue;
-                                    }
-                                }
-                
-                            }
-                        }
-                        */
-                    }
-
-                    if (isPotentiallyReachable(CI, I)) {
-                        LOG(LVL_DEBUG) << "Stack var: " << *V << " used by inst: "
-                            << *I << "\n";
-                        //LOG(LVL_INFO) << *func << "\n";
-                        reachable = true;
-                    }
-
-                }
-                if (reachable) {
-                    CastInst *cast_loc =
-                        CastInst::CreatePointerCast(V, Int8PtrTy(M));
-                    std::vector <Value*> Args;
-                    Args.push_back(cast_loc);
-                    Args.push_back(CurCall);
-                    CallInst *checkstackvar_call = CallInst::Create(checkstackvar, Args, "");
-                    cast_loc->insertAfter(voidcallstack_call);
-                    cast_loc->setDebugLoc(DLoc);
-                    LOG(LVL_DEBUG) << "checkstackvar\n";
-                    checkstackvar_call->insertAfter(cast_loc);
-                    checkstackvar_call->setDebugLoc(DLoc);
-                    /*
-                    CallInst *checkstackvar_call = CallInst::Create(checkstackvar, {cast_loc}, "");
-                    checkstackvar_call->insertAfter(CI);
-                    checkstackvar_call->setDebugLoc(DLoc);
-                    */
-                    instr = true;
-                    break;
-
-                }
-            }
-        }
-        if (instr)
-            logID(DLoc, cur_call);
+        CastInst *cast_loc =
+            CastInst::CreatePointerCast(AI, Int8PtrTy(M));
+        std::vector <Value*> Args;
+        Args.push_back(cast_loc);
+        Args.push_back(CurCall);
+        CallInst *checkstackvar_call = CallInst::Create(checkstackvar, Args, "");
+        cast_loc->insertAfter(CI);
+        cast_loc->setDebugLoc(DLoc);
+        LOG(LVL_DEBUG) << "checkstackvar\n";
+        checkstackvar_call->insertAfter(cast_loc);
+        checkstackvar_call->setDebugLoc(DLoc);
+        
+        logID(DLoc, cur_call);
 
     }
 
@@ -443,7 +551,6 @@ struct HeapExpoFuncTracker : public FunctionPass  {
             initialized = false;
         }
 
-        stack_ptrs.clear();
 
         if (!initialized) 
             initialize(M);
@@ -454,7 +561,16 @@ struct HeapExpoFuncTracker : public FunctionPass  {
             if (isa<StoreInst> (I)) {
                 LOG(LVL_DEBUG) << "Store instruction: " << *I << "\n";
                 StoreInst *SI = dyn_cast<StoreInst> (I);
+
+                
                 if (SI->getValueOperand()->getType()->isPointerTy()) {
+                
+                    AllocaInst *AI = isStackPtr(SI->getPointerOperand());
+                    if (AI)  {
+                        defs[AI].insert(I);
+                        stack_ptrs.insert(AI);
+                    }
+
                     if (isa<GlobalVariable>(SI->getPointerOperand()))
                         LOG(LVL_DEBUG) << "Storing to global var\n" ;
                     if (isa<ConstantPointerNull>(SI->getValueOperand())) {
@@ -468,7 +584,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
                         LOG(LVL_DEBUG) << "Value is a ptr\n";
                         
                         /* Don't instr if storing to stack */
-                        if (isStackPtr(SI->getPointerOperand())) {
+                        if (AI) {
                             stack_store_instr_cnt++;
                             //continue;
                         }
@@ -488,6 +604,22 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
                 }
             }
+            else if (isa<LoadInst> (I)) {
+
+                LoadInst *LI = dyn_cast<LoadInst> (I);
+
+                if (LI->getPointerOperandType()->getPointerElementType()->isPointerTy()) {
+                
+                    AllocaInst *AI = isStackPtr(LI->getPointerOperand());
+                    if (AI)  {
+                        uses[AI].insert(I);
+                        stack_ptrs.insert(AI);
+                    }
+
+                }
+                
+
+            }
             else if (isa<CallInst> (I)) {
 
                 CallInst *CI = dyn_cast<CallInst> (I);
@@ -504,11 +636,33 @@ struct HeapExpoFuncTracker : public FunctionPass  {
                     fname.find("llvm.") == 0 || fname.find("clang") == 0)
                     continue;
 
-                instrVoid(CI);
+                calls_to_instr.insert(CI);
                 LOG(LVL_DEBUG) << "Void: "<< *CI << "\n";
 
             }
         }
+
+        for (CallInst *CI : calls_to_instr) {
+            
+            uint32_t cur_call = rand() & 0xffffffff;
+
+            for (AllocaInst *AI: stack_ptrs) {
+                /*
+                if (isPotentiallyDefed(CI, &defs[AI]) &&
+                        isPotentiallyUsed(CI, &uses[AI], &defs[AI])) {
+                        */
+                if (isPotentiallyUsed(CI, &uses[AI], &defs[AI])) {
+                    instrCheck(CI, AI, cur_call);
+                }
+            }
+            instrVoid(CI);
+        }
+
+
+        stack_ptrs.clear();
+        uses.clear();
+        defs.clear();
+        calls_to_instr.clear();
         return false;
 
     }
@@ -523,12 +677,12 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         regptr = cast<Function>(regptr_def);
         regptr->setCallingConv(CallingConv::C);
         
-        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M), Int8PtrTy(M));
+        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M));
         voidcallstack = cast<Function>(voidcallstack_def);
         voidcallstack->setCallingConv(CallingConv::C);
 
         //Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32PtrTy(M));
-        Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M));
+        Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
         checkstackvar = cast<Function>(checkstackvar_def);
         checkstackvar->setCallingConv(CallingConv::C);
 
