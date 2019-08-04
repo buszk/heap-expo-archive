@@ -799,6 +799,35 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
     SUNLOCK(obj_mutex);
 }
 
+EXT_C void stack_regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
+    uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
+    uintptr_t ptr_val= (uintptr_t)ptr_val_;
+    
+    uintptr_t obj_addr;
+    struct object_info_t *obj_info;
+    obj_addr = 0;
+    obj_info = NULL;
+    
+    if (ptr_val < 4096) {
+        return;
+    }
+
+    get_object_addr(ptr_val, obj_addr, obj_info);
+    PRINTF(3, "[HeapExpo][stack_regptr]: loc:%016lx val:%016lx id:%08x obj:%016lx\n", ptr_loc, ptr_val, id, obj_addr);
+
+    if (obj_addr) {
+        LOCK(obj_info->stack_mutex);
+        obj_info->stack_edges[ptr_loc] = id;
+        UNLOCK(obj_info->stack_mutex);
+        if (!stack_record) {
+            INT_MALLOC(stack_record, sptype);
+        }
+        stack_record->insert(ptr_loc);
+    }
+
+}
+
+
 EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
 

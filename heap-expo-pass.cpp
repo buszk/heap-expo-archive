@@ -441,7 +441,7 @@ static void logVarID(int fd, DIVariable *V, uint32_t cur_call) {
 struct HeapExpoFuncTracker : public FunctionPass  {
     bool initialized;
     Module *M;
-    Function *regptr, *deregptr;
+    Function *regptr, *deregptr, *stack_regptr;
     Function *voidcallstack, *checkstackvar;
     Function *Func;
     size_t store_instr_cnt = 0;
@@ -511,6 +511,35 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
         logID(fd, DLoc, cur_call);
     }
+    
+    void instrStackReg(StoreInst *SI) {
+
+        DebugLoc DLoc = SI->getDebugLoc();
+        if (!DLoc)
+            DLoc = DebugLoc::get(0, 0, (MDNode*)Func->getSubprogram());
+       
+        std::vector <Value*> Args;
+
+        uint32_t cur_call = rand() & 0xffffffff;
+        ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
+
+        CastInst *cast_loc =
+            CastInst::CreatePointerCast(SI->getPointerOperand(), Int8PtrTy(M));
+        cast_loc->insertBefore(SI);
+        cast_loc->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_loc);
+        CastInst *cast_val =
+            CastInst::CreatePointerCast(SI->getValueOperand(), Int8PtrTy(M));
+        cast_val->insertBefore(SI);
+        cast_val->setDebugLoc(DLoc);
+        Args.push_back((Value*)cast_val);
+        Args.push_back((Value*)CurCall);
+        CallInst *stack_regptr_call = CallInst::Create(stack_regptr, Args, "");
+        stack_regptr_call->insertBefore(SI);
+        stack_regptr_call->setDebugLoc(DLoc);
+
+        logID(fd, DLoc, cur_call);
+    }
 
     void instrVoid(CallInst *CI) {
         
@@ -562,6 +591,10 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
         regptr = cast<Function>(regptr_def);
         regptr->setCallingConv(CallingConv::C);
+        
+        Constant *stack_regptr_def = M->getOrInsertFunction("stack_regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
+        stack_regptr = cast<Function>(stack_regptr_def);
+        stack_regptr->setCallingConv(CallingConv::C);
         
         Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M));
         voidcallstack = cast<Function>(voidcallstack_def);
@@ -641,26 +674,21 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
                 
                     AllocaInst *AI = getStackPtr(SI->getPointerOperand());
                     if (AI)  {
+
                         defs[AI].insert(I);
                         stack_ptrs.insert(AI);
-                    }
 
-                    if (isa<ConstantPointerNull>(SI->getValueOperand())) {
-                        LOG(LVL_DEBUG) << "Value is a nullptr\n";
-                            
-                        instrDereg(SI);
-                        stack_store_instr_cnt ++;
-
-                    } else {
-                        LOG(LVL_DEBUG) << "Value is a ptr\n";
-                        
-                        if (AI) {
+                        if (isa<ConstantPointerNull>(SI->getValueOperand())) {
+                            LOG(LVL_DEBUG) << "Value is a nullptr\n";
+                            stack_store_instr_cnt ++;
+                        } 
+                        else  {
+                            LOG(LVL_DEBUG) << "Value is a ptr\n";
                             stack_store_instr_cnt++;
-                            instrReg(SI);
+                            instrStackReg(SI);
                         }
 
                     }
-
                 }
             }
             else if (isa<LoadInst> (I)) {
@@ -840,12 +868,12 @@ static RegisterPass<HeapExpoStackTracker> Z("HeapExpoStack", "HeapExpo Stack Pas
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoGlobalTracker());
-    PM.add(new HeapExpoStackTracker());
-    PM.add(new HeapExpoHeapTracker());
 }
 
 static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
+    PM.add(new HeapExpoStackTracker());
+    PM.add(new HeapExpoHeapTracker());
 }
 
 static RegisterStandardPasses
