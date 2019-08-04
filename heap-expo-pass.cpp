@@ -181,7 +181,7 @@ struct HeapExpoGlobalTracker : public ModulePass {
                 G->getName() == "llvm.used") 
                 continue;
     
-            /* Ignore constant global variables */
+            /* Ignore constant jlobal variables */
             if (GV->isConstant())
                 continue;
 
@@ -196,11 +196,13 @@ struct HeapExpoGlobalTracker : public ModulePass {
         }
         
         Builder.CreateRet(NULL);
-        
-        std::ostringstream ss;
-        ss << "Instrumented tracking to " << global_instr_cnt << 
-            " global variables\n";
-        LOG(LVL_INFO) << ss.str();
+       
+        if (global_instr_cnt) {
+            std::ostringstream ss;
+            ss << "Instrumented tracking to " << global_instr_cnt << 
+                " global variables\n";
+            LOG(LVL_INFO) << ss.str();
+        }
         return false;
     }
 
@@ -437,7 +439,6 @@ static void logVarID(int fd, DIVariable *V, uint32_t cur_call) {
 
 
 struct HeapExpoFuncTracker : public FunctionPass  {
-    static char ID;
     bool initialized;
     Module *M;
     Function *regptr, *deregptr;
@@ -448,13 +449,8 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     size_t store_const_global_cnt = 0;
     int fd;
     
-    std::set<AllocaInst*> stack_ptrs;
-    std::map<AllocaInst*, DIVariable*> stack_vars;
-    std::vector<CallInst*> calls_to_instr;
-    std::map<AllocaInst*, std::set<Instruction*>> defs;
-    std::map<AllocaInst*, std::set<Instruction*>> uses;
 
-    HeapExpoFuncTracker() : FunctionPass(ID) {
+    HeapExpoFuncTracker(char ID) : FunctionPass(ID) {
         initialized = false;
     }
 
@@ -528,7 +524,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
     }
 
-    void instrCheck(CallInst *CI, AllocaInst *AI) {
+    void instrCheck(CallInst *CI, AllocaInst *AI, DIVariable *V) {
         
         uint32_t cur_call = rand() & 0xffffffff;
 
@@ -551,11 +547,74 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         checkstackvar_call->setDebugLoc(DLoc);
         
         logID(fd, DLoc, cur_call);
-        logVarID(fd, stack_vars[AI], cur_call);
+        logVarID(fd, V, cur_call);
 
     }
 
 
+    
+    void initialize(Module *M) { 
+
+        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
+        deregptr = cast<Function>(deregptr_def);
+        deregptr->setCallingConv(CallingConv::C);
+        
+        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
+        regptr = cast<Function>(regptr_def);
+        regptr->setCallingConv(CallingConv::C);
+        
+        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M));
+        voidcallstack = cast<Function>(voidcallstack_def);
+        voidcallstack->setCallingConv(CallingConv::C);
+
+        Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
+        checkstackvar = cast<Function>(checkstackvar_def);
+        checkstackvar->setCallingConv(CallingConv::C);
+
+        struct timeval time;
+        gettimeofday(&time, NULL);
+        srand((time.tv_sec*1000) + (time.tv_usec/1000));
+        
+        fd = open("store_inst.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
+        
+        initialized = true;
+
+    }
+
+    virtual bool runOnFunction(Function &F) = 0;
+
+    virtual bool doFinalization(Module &Mod) {
+        std::ostringstream ss;
+        if (store_instr_cnt)
+            ss << "Instrumented tracking to " << store_instr_cnt << 
+                " all store instructions\n";
+        if (stack_store_instr_cnt)
+            ss << "Instrumented tracking to " << stack_store_instr_cnt << 
+                " stack store instructions\n";
+        if (store_const_global_cnt)
+            ss << "Instrumented tracking to " << store_const_global_cnt << 
+                " store const global instructions\n";
+        LOG(LVL_INFO) << ss.str();
+
+        close(fd);
+
+        return false;
+    }
+
+};
+
+struct HeapExpoStackTracker : public HeapExpoFuncTracker {
+    static char ID;
+    std::set<AllocaInst*> stack_ptrs;
+    std::map<AllocaInst*, DIVariable*> stack_vars;
+    std::vector<CallInst*> calls_to_instr;
+    std::map<AllocaInst*, std::set<Instruction*>> defs;
+    std::map<AllocaInst*, std::set<Instruction*>> uses;
+    
+    HeapExpoStackTracker (): HeapExpoFuncTracker(ID) {
+        
+    }
+    
     virtual bool runOnFunction(Function &F) {
 
         LOG(LVL_DEBUG) << "HeapExpo: ";
@@ -586,33 +645,19 @@ struct HeapExpoFuncTracker : public FunctionPass  {
                         stack_ptrs.insert(AI);
                     }
 
-                    if (isa<GlobalVariable>(SI->getPointerOperand()))
-                        LOG(LVL_DEBUG) << "Storing to global var\n" ;
                     if (isa<ConstantPointerNull>(SI->getValueOperand())) {
                         LOG(LVL_DEBUG) << "Value is a nullptr\n";
                             
                         instrDereg(SI);
-                        
-                        store_instr_cnt ++;
+                        stack_store_instr_cnt ++;
 
                     } else {
                         LOG(LVL_DEBUG) << "Value is a ptr\n";
                         
-                        /* Don't instr if storing to stack */
                         if (AI) {
                             stack_store_instr_cnt++;
-                            //continue;
+                            instrReg(SI);
                         }
-
-                        if (isa<Constant>(SI->getValueOperand())) {
-                            instrDereg(SI);
-                            store_const_global_cnt++;
-                            continue;
-                        }
-
-                        instrReg(SI);
-
-                        store_instr_cnt ++;
 
                     }
 
@@ -701,7 +746,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
                 if (isPotentiallyDefed(CI, defs[AI]) &&
                         isPotentiallyUsed(CI, uses[AI], defs[AI])) {
                 //if (isPotentiallyUsed(CI, uses[AI], defs[AI])) {
-                    instrCheck(CI, AI);
+                    instrCheck(CI, AI, stack_vars[AI]);
                 }
             }
             instrVoid(CI);
@@ -715,52 +760,64 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         return false;
 
     }
-    
-    bool initialize(Module *M) { 
-
-        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
-        deregptr = cast<Function>(deregptr_def);
-        deregptr->setCallingConv(CallingConv::C);
-        
-        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
-        regptr = cast<Function>(regptr_def);
-        regptr->setCallingConv(CallingConv::C);
-        
-        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M));
-        voidcallstack = cast<Function>(voidcallstack_def);
-        voidcallstack->setCallingConv(CallingConv::C);
-
-        Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
-        checkstackvar = cast<Function>(checkstackvar_def);
-        checkstackvar->setCallingConv(CallingConv::C);
-
-        struct timeval time;
-        gettimeofday(&time, NULL);
-        srand((time.tv_sec*1000) + (time.tv_usec/1000));
-        
-        fd = open("store_inst.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
-        
-        initialized = true;
-        return false;
-    }
-
-    virtual bool doFinalization(Module &Mod) {
-        std::ostringstream ss;
-        ss << "Instrumented tracking to " << store_instr_cnt << 
-            " all store instructions\n";
-        ss << "Instrumented tracking to " << stack_store_instr_cnt << 
-            " stack store instructions\n";
-        ss << "Instrumented tracking to " << store_const_global_cnt << 
-            " store const global instructions\n";
-        LOG(LVL_INFO) << ss.str();
-
-        close(fd);
-
-        return false;
-    }
 
 };
 
+struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
+    static char ID;
+
+    HeapExpoHeapTracker (): HeapExpoFuncTracker(ID) {
+        
+    }
+
+    virtual bool runOnFunction(Function &F) {
+
+        Func = &F;
+        if (M != F.getParent())
+            M = F.getParent();
+
+        if (!initialized) 
+            initialize(M);
+
+        for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
+
+            Instruction *I = &*i;
+
+            if (isa<StoreInst> (I))  {
+
+                StoreInst *SI = cast<StoreInst> (I);
+
+                if (SI->getValueOperand()->getType()->isPointerTy()) {
+                    
+                    if (!getStackPtr(SI->getPointerOperand())) {
+
+                        if (isa<GlobalVariable>(SI->getPointerOperand()))
+                            LOG(LVL_DEBUG) << "Storing to global var\n" ;
+                            
+                        if (isa<Constant>(SI->getValueOperand())) {
+                            store_const_global_cnt++;
+                            break;
+                        }
+
+                        if (isa<ConstantPointerNull>(SI->getValueOperand())) {
+                            store_instr_cnt ++;
+                            instrDereg(SI);
+
+                        }
+                        else {
+
+                            store_instr_cnt ++;
+                            instrReg(SI);
+
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    
+};
 }
 
 
@@ -768,22 +825,27 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
 
 char HeapExpoGlobalTracker::ID = 1;
-char HeapExpoFuncTracker::ID = 2;
+char HeapExpoHeapTracker::ID = 2;
+char HeapExpoStackTracker::ID = 3;
 static RegisterPass<HeapExpoGlobalTracker> X("HeapExpoGlobal", "HeapExpo Global Pass",
                              false /* Only looks at CFG */,
                              false /* Analysis Pass */);
-static RegisterPass<HeapExpoFuncTracker> Y("HeapExpoFunc", "HeapExpo Function Pass",
+static RegisterPass<HeapExpoHeapTracker> Y("HeapExpoHeap", "HeapExpo Heap Pass",
+                             false /* Only looks at CFG */,
+                             false /* Analysis Pass */);
+static RegisterPass<HeapExpoStackTracker> Z("HeapExpoStack", "HeapExpo Stack Pass",
                              false /* Only looks at CFG */,
                              false /* Analysis Pass */);
 
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoGlobalTracker());
+    PM.add(new HeapExpoStackTracker());
+    PM.add(new HeapExpoHeapTracker());
 }
 
 static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
-    PM.add(new HeapExpoFuncTracker());
 }
 
 static RegisterStandardPasses

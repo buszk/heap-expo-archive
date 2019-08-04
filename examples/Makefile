@@ -5,7 +5,7 @@ TEST_PROGS = global_uaf heap_uaf stack_uaf dangling stack_func_uaf stack_var_unu
 
 all: $(TEST_PROGS)
 
-%:%.c
+%:%.c ../LLVMHeapExpo.so
 	$(HECC) -g $< -o $@  
 
 PASS_MSG = [HeapExpo][Test] Passed
