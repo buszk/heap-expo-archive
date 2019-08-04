@@ -136,22 +136,6 @@ static void addToGlobalCtors(Module *M, Function* F) {
         
 }
 
-/*
-static bool isConstantGlobalPtr(Value *V) {
-    if (!isa<User>(V))
-        return false;
-
-    User *U = (User*)V;
-
-    if (isa<GlobalVariable>(U)) {
-        return true;
-    }
-    else if (isa<BinaryOperator>(U)) {
-        return isConstantGlobalPtr(U->getOperand(0)) || isConstantGlobalPtr(U->getOperand(1));
-    }
-    return false;
-}
-*/
 struct HeapExpoGlobalTracker : public ModulePass {
     static char ID;
 
@@ -222,8 +206,8 @@ struct HeapExpoGlobalTracker : public ModulePass {
 
 };
 
-static bool isPotentiallyDefed(Instruction *To, std::set<Instruction*> *Defs) {
-    for (Instruction *I : *Defs) 
+static bool isPotentiallyDefed(Instruction *To, std::set<Instruction*> &Defs) {
+    for (Instruction *I : Defs) 
         if (isPotentiallyReachable(I, To))
             return true;
     return false;
@@ -242,11 +226,6 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> &Uses, s
     
     auto in_set = [](Instruction *I, std::set<Instruction*> Set) {
         return Set.find(I) != Set.end();
-    };
-
-    auto remove_set = [] (Instruction *I , std::set<Instruction*> Set) {
-
-        Set.erase(Set.find(I));
     };
 
     std::set<BasicBlock*> ToBlocks;
@@ -308,14 +287,11 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> &Uses, s
 
     auto diff_set = [] (std::set<BasicBlock*> &s1, std::set<BasicBlock*> &s2, 
             std::set<BasicBlock*> &output) {
-        /*
-        std::set_difference(s1.begin(), s1.end(),
-                              s2.begin(), s2.end(),
-                              output.begin());
-                              */
+
         for (BasicBlock *b : s1) 
             if (s2.find(b) == s2.end()) 
                 output.insert(b);
+
     };
 
     diff_set(UseBlock, DefBlock, ToBlocks);
@@ -323,14 +299,11 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> &Uses, s
 
     auto inter_set = [] (std::set<BasicBlock*> &s1, std::set<BasicBlock*> &s2, 
             std::set<BasicBlock*> &output) {
-        /*
-        std::set_intersection(s1.begin(), s1.end(),
-                              s2.begin(), s2.end(),
-                              output.begin());
-                              */
+
         for (BasicBlock *b: s1)
             if (s2.find(b) != s2.end())
                 output.insert(b);
+
     };
     inter_set (UseBlock, DefBlock, IntersectBlock);
 
@@ -378,16 +351,6 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> &Uses, s
                 WorkList.insert(next);
  
             if (to_parent && next== (BasicBlock*)p) {
-                /*
-                LOG(LVL_INFO) << "source: "<< *From << "\ndst:" << *next << 
-                    "\ncur:" << *cur << "\n";
-                LOG(LVL_INFO) << "Reached\n";
-                for (BasicBlock* b : Reached) {
-                    LOG(LVL_INFO) << *b << "\n";
-                }
-                */
-
-
                 return true;
             }
 
@@ -400,13 +363,86 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> &Uses, s
 
 }
 
+static AllocaInst* getStackPtr(Value *V) {
+
+    User *U = dyn_cast<User>(V);
+
+    if (U) {
+    
+        if (isa<AllocaInst>(U)) {
+            return dyn_cast<AllocaInst>(U);
+        }
+        else if (isa<BinaryOperator>(U)) {
+
+            if (getStackPtr(U->getOperand(0)))
+                return getStackPtr(U->getOperand(0));
+            if (getStackPtr(U->getOperand(1)))
+                return getStackPtr(U->getOperand(1));
+
+        }
+
+    }
+
+    return NULL;
+
+}
+
+static void logToFile(int fd, char* buf, int n) {
+    
+    if ( n < 0 ) {
+        LOG(LVL_WARNING) << "sprintf failed\n";
+        return;
+    }
+    if (fd < 0) {
+        LOG(LVL_WARNING) << "fd not setup\n";
+        return;
+    } 
+    if (n != write(fd, buf, n)) 
+        return;
+    
+}
+
+static void logID(int fd, DebugLoc DLoc, uint32_t cur_call) {
+
+    int n;
+    char buf[256];
+
+    if (!DLoc || !DLoc.getScope())
+        return;
+
+    DIScope *scp = cast<DIScope>(DLoc.getScope());
+
+    std::string fname = scp->getFilename();
+    n = sprintf(buf, "%08x: %s:%d\n", cur_call, fname.c_str(), DLoc.getLine());
+
+    logToFile(fd, buf, n);
+
+}
+
+static void logVarID(int fd, DIVariable *V, uint32_t cur_call) {
+
+    int n;
+    char buf[256];
+
+    if (!V) return;
+
+    std::string fname =  V->getFilename();
+    std::string vname = V->getName();
+    n = sprintf(buf, "%08x: %s:%d [%s]\n", cur_call,
+            fname.c_str(), V->getLine(), vname.c_str());
+
+    logToFile(fd, buf, n);
+
+}
+
+
 struct HeapExpoFuncTracker : public FunctionPass  {
     static char ID;
     bool initialized;
     Module *M;
     Function *regptr, *deregptr;
     Function *voidcallstack, *checkstackvar;
-    Function *func;
+    Function *Func;
     size_t store_instr_cnt = 0;
     size_t stack_store_instr_cnt = 0;
     size_t store_const_global_cnt = 0;
@@ -422,79 +458,11 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         initialized = false;
     }
 
-    AllocaInst* isStackPtr(Value *V) {
-        if (!isa<User>(V))
-            return NULL;
-
-        User *U = (User*)V;
-
-        if (isa<AllocaInst>(U)) {
-            return dyn_cast<AllocaInst>(U);
-        }
-        else if (isa<BinaryOperator>(U)) {
-            AllocaInst *ai;
-            ai = isStackPtr(U->getOperand(0));
-            if (ai) return ai;
-            ai = isStackPtr(U->getOperand(1));
-            if (ai) return ai;
-        }
-        return NULL;
-    }
-
-    void logID(DebugLoc DLoc, uint32_t cur_call) {
-
-        int n;
-        char buf[256];
-
-        if (!DLoc || !DLoc.getScope())
-            return;
-
-        DIScope *scp = cast<DIScope>(DLoc.getScope());
-
-        std::string fname = scp->getFilename();
-        n = sprintf(buf, "%08x: %s:%d\n", cur_call, fname.c_str(), DLoc.getLine());
-        
-        if ( n < 0 ) {
-            LOG(LVL_WARNING) << "sprintf failed\n";
-            return;
-        }
-        if (fd < 0) {
-            LOG(LVL_WARNING) << "fd not setup\n";
-            return;
-        } 
-        if (n != write(fd, buf, n)) 
-            return;
-    }
-
-    void logVarID(DIVariable *V, uint32_t cur_call) {
-
-        int n;
-        char buf[256];
-
-        if (!V) return;
-
-        std::string fname =  V->getFilename();
-        std::string vname = V->getName();
-        n = sprintf(buf, "%08x: %s:%d [%s]\n", cur_call,
-                fname.c_str(), V->getLine(), vname.c_str());
-
-        if ( n < 0 ) {
-            LOG(LVL_WARNING) << "sprintf failed\n";
-            return;
-        }
-        if (fd < 0) {
-            LOG(LVL_WARNING) << "fd not setup\n";
-            return;
-        } 
-        if (n != write(fd, buf, n)) 
-            return;
-    }
-
     void instrDereg(StoreInst *SI) {
 
         DebugLoc DLoc = SI->getDebugLoc();
         if (!DLoc) 
-            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+            DLoc = DebugLoc::get(0, 0, (MDNode*)Func->getSubprogram());
         
         uint32_t cur_call = rand() & 0xffffffff;
         ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
@@ -515,7 +483,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         deregptr_call->insertBefore(SI);
         deregptr_call->setDebugLoc(DLoc);
 
-        logID(DLoc, cur_call);
+        logID(fd, DLoc, cur_call);
 
     }
 
@@ -523,7 +491,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
         DebugLoc DLoc = SI->getDebugLoc();
         if (!DLoc)
-            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+            DLoc = DebugLoc::get(0, 0, (MDNode*)Func->getSubprogram());
        
         std::vector <Value*> Args;
 
@@ -545,32 +513,28 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         regptr_call->insertBefore(SI);
         regptr_call->setDebugLoc(DLoc);
 
-        logID(DLoc, cur_call);
+        logID(fd, DLoc, cur_call);
     }
 
     void instrVoid(CallInst *CI) {
         
         DebugLoc DLoc = CI->getDebugLoc();
         if (!DLoc)
-            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+            DLoc = DebugLoc::get(0, 0, (MDNode*)Func->getSubprogram());
 
         CallInst *voidcallstack_call = CallInst::Create(voidcallstack, {}, "");
         voidcallstack_call->insertAfter(CI);
         voidcallstack_call->setDebugLoc(DLoc);
 
-
-
     }
+
     void instrCheck(CallInst *CI, AllocaInst *AI) {
         
         uint32_t cur_call = rand() & 0xffffffff;
 
         DebugLoc DLoc = CI->getDebugLoc();
         if (!DLoc)
-            DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
-        DebugLoc SDLoc = AI->getDebugLoc();
-        if (!SDLoc)
-            SDLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+            DLoc = DebugLoc::get(0, 0, (MDNode*)Func->getSubprogram());
 
         ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
 
@@ -586,10 +550,11 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         checkstackvar_call->insertAfter(cast_loc);
         checkstackvar_call->setDebugLoc(DLoc);
         
-        logID(DLoc, cur_call);
-        logVarID(stack_vars[AI], cur_call);
+        logID(fd, DLoc, cur_call);
+        logVarID(fd, stack_vars[AI], cur_call);
 
     }
+
 
     virtual bool runOnFunction(Function &F) {
 
@@ -605,7 +570,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         if (!initialized) 
             initialize(M);
 
-        func = &F;
+        Func = &F;
         for (inst_iterator i = inst_begin(F), e = inst_end(F); i != e; i++) {
             Instruction *I = &*i;
             if (isa<StoreInst> (I)) {
@@ -615,7 +580,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
                 
                 if (SI->getValueOperand()->getType()->isPointerTy()) {
                 
-                    AllocaInst *AI = isStackPtr(SI->getPointerOperand());
+                    AllocaInst *AI = getStackPtr(SI->getPointerOperand());
                     if (AI)  {
                         defs[AI].insert(I);
                         stack_ptrs.insert(AI);
@@ -639,7 +604,6 @@ struct HeapExpoFuncTracker : public FunctionPass  {
                             //continue;
                         }
 
-                        //if (isConstantGlobalPtr(SI->getValueOperand())) 
                         if (isa<Constant>(SI->getValueOperand())) {
                             instrDereg(SI);
                             store_const_global_cnt++;
@@ -658,7 +622,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
                 LoadInst *LI = dyn_cast<LoadInst> (I);
 
-                AllocaInst *AI = isStackPtr(LI->getPointerOperand());
+                AllocaInst *AI = getStackPtr(LI->getPointerOperand());
                 if (AI && AI->getAllocatedType()->isPointerTy())  {
                     uses[AI].insert(I);
                     stack_ptrs.insert(AI);
@@ -679,34 +643,53 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
                 StringRef fname = F->getName();
 
-                if (fname == "llvm.dbg.declare") {
-                    
-                    AllocaInst *AI = nullptr;
-                    DIVariable  *V = nullptr;
-                    Metadata *meta0 = cast<MetadataAsValue>(CI->getOperand(0))->getMetadata();
-                    if (isa<ValueAsMetadata>(meta0))  {
-                        Value *v0 = cast<ValueAsMetadata>(meta0)->getValue();
-                        if (isa<AllocaInst>(v0)) {
-                            AI = cast<AllocaInst>(v0);
+                /* 
+                 * No InstrinsicInst Class
+                 * Use function name to detect intrinsic functions
+                 */
+                if (F->getName().find("llvm.") == 0 || 
+                    F->getName().find("clang.") == 0) {
+
+                    /* Use declare instrinsic to Hook AllocaInst with DIVariable */
+                    if (fname == "llvm.dbg.declare") {
+                        
+                        AllocaInst *AI = nullptr;
+                        DIVariable  *V = nullptr;
+                        Metadata *meta0 = cast<MetadataAsValue>(CI->getOperand(0))->getMetadata();
+                        if (isa<ValueAsMetadata>(meta0))  {
+                            Value *v0 = cast<ValueAsMetadata>(meta0)->getValue();
+                            if (isa<AllocaInst>(v0)) {
+                                AI = cast<AllocaInst>(v0);
+                            }
+                        }
+
+                        Metadata *meta1 = cast<MetadataAsValue>(CI->getOperand(1))->getMetadata();
+                        if (isa<DIVariable>(meta1))
+                            V = cast<DIVariable>(meta1);
+
+                        if (AI && V) {
+                            stack_vars[AI] = V;
                         }
                     }
 
-                    Metadata *meta1 = cast<MetadataAsValue>(CI->getOperand(1))->getMetadata();
-                    if (isa<DIVariable>(meta1))
-                        V = cast<DIVariable>(meta1);
-
-                    if (AI && V) {
-                        stack_vars[AI] = V;
-                    }
-                }
+                    continue;
+                } 
 
                 if (fname == "regptr" || fname == "deregptr" ||
-                    fname == "voidcallstack" || fname == "checkstackvar"||
-                    fname.find("llvm.") == 0 || fname.find("clang") == 0)
+                    fname == "voidcallstack" || fname == "checkstackvar")
                     continue;
 
+                /* A call with stack var addr is considered a Def */
+                for (Value *V : CI->arg_operands()) {
+
+                    AllocaInst *AI = getStackPtr(V);
+
+                    if (AI)
+                        defs[AI].insert(I);
+
+                }
+
                 calls_to_instr.push_back(CI);
-                LOG(LVL_DEBUG) << "Void: "<< *CI << "\n";
 
             }
 
@@ -715,12 +698,9 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         for (CallInst *CI : calls_to_instr) {
             
             for (AllocaInst *AI: stack_ptrs) {
-                /*
-                if (isPotentiallyDefed(CI, &defs[AI]) &&
-                        isPotentiallyUsed(CI, &uses[AI], &defs[AI])) {
-                        */
-                if (isPotentiallyUsed(CI, uses[AI], defs[AI])) {
-                    //LOG(LVL_INFO) << *CI << " " << *AI << "\n";
+                if (isPotentiallyDefed(CI, defs[AI]) &&
+                        isPotentiallyUsed(CI, uses[AI], defs[AI])) {
+                //if (isPotentiallyUsed(CI, uses[AI], defs[AI])) {
                     instrCheck(CI, AI);
                 }
             }
@@ -750,7 +730,6 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         voidcallstack = cast<Function>(voidcallstack_def);
         voidcallstack->setCallingConv(CallingConv::C);
 
-        //Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32PtrTy(M));
         Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
         checkstackvar = cast<Function>(checkstackvar_def);
         checkstackvar->setCallingConv(CallingConv::C);
@@ -781,6 +760,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     }
 
 };
+
 }
 
 
@@ -804,7 +784,6 @@ static void registerMyPass(const PassManagerBuilder &,
 static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoFuncTracker());
-
 }
 
 static RegisterStandardPasses
@@ -818,8 +797,3 @@ static RegisterStandardPasses
 static RegisterStandardPasses
     RegisterMyPass0(PassManagerBuilder::EP_EnabledOnOptLevel0,
             registerMyPass);
-/*
-static RegisterStandardPasses
-    RegisterMyPassEarly0(PassManagerBuilder::EP_EnabledOnOptLevel0,
-            registerMyPassEarly);
-            */
