@@ -468,11 +468,9 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         if (ptr_loc < sp) {
             continue;
         }
-/*
         if (!stack_record || stack_record->find(ptr_loc) == stack_record->end())  {
             continue;
         }
-*/
         if (cur_val >= moit->first && cur_val < moit->first + moit->second.size) {
             if (invalidate_mode > 1)
                 *(uintptr_t*)ptr_loc = cur_val | KADDR; 
@@ -482,7 +480,8 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
             if (!inval_record) {
                 INT_MALLOC(inval_record, irtype);
             }
-            inval_record->insert(make_pair<>(ptr_loc, id));
+            //inval_record->insert(make_pair<>(ptr_loc, id));
+            (*inval_record)[ptr_loc] = id;
 
         }
     }
@@ -751,7 +750,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
 
     get_object_addr(ptr_val, obj_addr, obj_info);
     get_object_addr(ptr_loc, ptr_obj_addr, ptr_obj_info);
-    PRINTF(3, "[HeapExpo][regptr]: loc:%016lx val:%016lx\n[HeapExpo][regptr]: %016lx -> %016lx\n", ptr_loc, ptr_val, ptr_obj_addr, obj_addr);
+    PRINTF(3, "[HeapExpo][regptr]: loc:%016lx val:%016lx id:%08x\n[HeapExpo][regptr]: %016lx -> %016lx\n", ptr_loc, ptr_val, id, ptr_obj_addr, obj_addr);
 
     check_residuals();
     
@@ -789,7 +788,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
      */
     if (obj_addr && !ptr_obj_addr ) {
         LOCK(obj_info->stack_mutex);
-        obj_info->stack_edges.insert(make_pair<>(ptr_loc, id));
+        obj_info->stack_edges[ptr_loc] = id;
         UNLOCK(obj_info->stack_mutex);
         if (!stack_record) {
             INT_MALLOC(stack_record, sptype);
@@ -803,7 +802,7 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
 EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
 
-    PRINTF(3, "[HeapExpo][deregptr]: loc:%016lx\n", ptr_loc);
+    PRINTF(3, "[HeapExpo][deregptr]: loc:%016lx id:%08x\n", ptr_loc, id);
     check_residuals();
     SLOCK(obj_mutex);
     deregptr_(ptr_loc, false);
@@ -847,8 +846,8 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
         
         uint32_t store_id = it->second;
 
-        PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx]\n", 
-                ptr_loc, id, store_id);
+        PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx] val[%016lx]\n", 
+                ptr_loc, id, store_id, cur_val);
 
     }
     

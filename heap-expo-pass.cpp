@@ -229,21 +229,24 @@ static bool isPotentiallyDefed(Instruction *To, std::set<Instruction*> *Defs) {
     return false;
 }
 
-static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> *Uses, std::set<Instruction*> *Defs) {
+static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> &Uses, std::set<Instruction*> &Defs) {
+
+    /* Fast Path */
+    if (Uses.size() == 0) {
+        return false;
+    }
+
     bool def_in_block = false;
     bool found_src = false;
     BasicBlock *p = (BasicBlock*)From->getParent();
     
-    auto in_set = [](Instruction *I, std::set<Instruction*> *Set) {
-        if (Set)
-            return Set->find(I) != Set->end();
-        return false;
+    auto in_set = [](Instruction *I, std::set<Instruction*> Set) {
+        return Set.find(I) != Set.end();
     };
 
-    auto remove_set = [] (Instruction *I , std::set<Instruction*> *Set) {
+    auto remove_set = [] (Instruction *I , std::set<Instruction*> Set) {
 
-        if (Set)
-            Set->erase(Set->find(I));
+        Set.erase(Set.find(I));
     };
 
     std::set<BasicBlock*> ToBlocks;
@@ -251,35 +254,56 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> *Uses, s
     std::set<BasicBlock*> IntersectBlock;
     std::set<BasicBlock*> UseBlock;
     std::set<BasicBlock*> DefBlock;
+   /* 
+    LOG(LVL_DEBUG) << "==========================\n";
+    LOG(LVL_DEBUG) << "Defs\n";
+    for (Instruction* i : Defs) {
+        LOG(LVL_DEBUG) << *i << "\n";
+    }
+    LOG(LVL_DEBUG) << "Uses\n";
+    for (Instruction* i : Uses) {
+        LOG(LVL_DEBUG) << *i << "\n";
+    }
+    */
 
     bool to_parent = false;
 
     for (auto i = p->begin(); i != p->end(); i++) {
         Instruction* I = (Instruction*) &*i;
-        if (I == From)
+        if (I == From) {
+            //LOG(LVL_DEBUG) << "Found call\n";
             found_src = true;
-        else if (found_src && in_set(I, Defs)) 
+        }
+        else if (found_src && in_set(I, Defs)) {
+            //LOG(LVL_DEBUG) << "Def after call\n";
             return false;
-        else if (found_src && in_set(I, Uses)) 
+        }
+        else if (found_src && in_set(I, Uses))  {
+            //LOG(LVL_DEBUG) << "Use after call\n";
             return true;
-        else if (!found_src && in_set(I, Defs))
+        }
+        else if (!found_src && in_set(I, Defs)) {
+            //LOG(LVL_DEBUG) << "Found def in block before call\n";
             def_in_block = true;
-        else if (!found_src && in_set(I, Uses) && def_in_block)
-            {}//remove_set(I, Uses);
-        else if (!found_src && in_set(I, Uses) && !def_in_block) 
+        }
+        else if (!found_src && in_set(I, Uses) && def_in_block) {
+            //LOG(LVL_DEBUG) << "Found use in block before call but guarded by def\n";
+            //remove_set(I, Uses);
+        }
+        else if (!found_src && in_set(I, Uses) && !def_in_block)  {
+            //LOG(LVL_DEBUG) << "Found use in block before call and any def\n";
             to_parent = true;
+        }
     }
 
-    if (Uses)
-        for (Instruction *I : *Uses) {
-            if (I->getParent() != p)
-                UseBlock.insert((BasicBlock*)I->getParent());
-        }
-    if (Defs)
-        for (Instruction *I : *Defs) {
-            if (I->getParent() != p)
-                DefBlock.insert((BasicBlock*)I->getParent());
-        }
+    for (Instruction *I : Uses) {
+        if (I->getParent() != p)
+            UseBlock.insert((BasicBlock*)I->getParent());
+    }
+    for (Instruction *I : Defs) {
+        if (I->getParent() != p)
+            DefBlock.insert((BasicBlock*)I->getParent());
+    }
 
 
     auto diff_set = [] (std::set<BasicBlock*> &s1, std::set<BasicBlock*> &s2, 
@@ -323,26 +347,21 @@ static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> *Uses, s
             }
         }
     }
+    /* Fast Path */
+    if (ToBlocks.size() == 0 && !to_parent)
+        return false;
 
     std::vector<BasicBlock*> Reached;
     std::set<BasicBlock*> WorkList;
     WorkList.insert((BasicBlock*)p);
-/*
-    LOG(LVL_INFO) << "Defs\n";
-    for (Instruction* i : *Defs) {
-        LOG(LVL_INFO) << *i << "\n";
-    }
-    LOG(LVL_INFO) << "Avoid\n";
+    /*
+    LOG(LVL_DEBUG) << "Avoid\n";
     for (BasicBlock* b: AvoidBlocks) {
-        LOG(LVL_INFO) << *b << "\n";
+        LOG(LVL_DEBUG) << *b << "\n";
     }
-    LOG(LVL_INFO) << "Uses\n";
-    for (Instruction* i : *Uses) {
-        LOG(LVL_INFO) << *i << "\n";
-    }
-    LOG(LVL_INFO) << "To\n";
+    LOG(LVL_DEBUG) << "To\n";
     for (BasicBlock* b: ToBlocks) {
-        LOG(LVL_INFO) << *b << "\n";
+        LOG(LVL_DEBUG) << *b << "\n";
     }
     */
     while(!WorkList.empty()) {
@@ -394,7 +413,8 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     int fd;
     
     std::set<AllocaInst*> stack_ptrs;
-    std::set<CallInst*> calls_to_instr;
+    std::map<AllocaInst*, DIVariable*> stack_vars;
+    std::vector<CallInst*> calls_to_instr;
     std::map<AllocaInst*, std::set<Instruction*>> defs;
     std::map<AllocaInst*, std::set<Instruction*>> uses;
 
@@ -434,6 +454,30 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         std::string fname = scp->getFilename();
         n = sprintf(buf, "%08x: %s:%d\n", cur_call, fname.c_str(), DLoc.getLine());
         
+        if ( n < 0 ) {
+            LOG(LVL_WARNING) << "sprintf failed\n";
+            return;
+        }
+        if (fd < 0) {
+            LOG(LVL_WARNING) << "fd not setup\n";
+            return;
+        } 
+        if (n != write(fd, buf, n)) 
+            return;
+    }
+
+    void logVarID(DIVariable *V, uint32_t cur_call) {
+
+        int n;
+        char buf[256];
+
+        if (!V) return;
+
+        std::string fname =  V->getFilename();
+        std::string vname = V->getName();
+        n = sprintf(buf, "%08x: %s:%d [%s]\n", cur_call,
+                fname.c_str(), V->getLine(), vname.c_str());
+
         if ( n < 0 ) {
             LOG(LVL_WARNING) << "sprintf failed\n";
             return;
@@ -517,11 +561,16 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
 
     }
-    void instrCheck(CallInst *CI, AllocaInst *AI, uint32_t cur_call) {
+    void instrCheck(CallInst *CI, AllocaInst *AI) {
         
+        uint32_t cur_call = rand() & 0xffffffff;
+
         DebugLoc DLoc = CI->getDebugLoc();
         if (!DLoc)
             DLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
+        DebugLoc SDLoc = AI->getDebugLoc();
+        if (!SDLoc)
+            SDLoc = DebugLoc::get(0, 0, (MDNode*)func->getSubprogram());
 
         ConstantInt *CurCall = ConstantInt::get(Int32Ty(M), cur_call);
 
@@ -538,6 +587,7 @@ struct HeapExpoFuncTracker : public FunctionPass  {
         checkstackvar_call->setDebugLoc(DLoc);
         
         logID(DLoc, cur_call);
+        logVarID(stack_vars[AI], cur_call);
 
     }
 
@@ -608,15 +658,12 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
                 LoadInst *LI = dyn_cast<LoadInst> (I);
 
-                if (LI->getPointerOperandType()->getPointerElementType()->isPointerTy()) {
-                
-                    AllocaInst *AI = isStackPtr(LI->getPointerOperand());
-                    if (AI)  {
-                        uses[AI].insert(I);
-                        stack_ptrs.insert(AI);
-                    }
-
+                AllocaInst *AI = isStackPtr(LI->getPointerOperand());
+                if (AI && AI->getAllocatedType()->isPointerTy())  {
+                    uses[AI].insert(I);
+                    stack_ptrs.insert(AI);
                 }
+
                 
 
             }
@@ -631,28 +678,50 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
 
                 StringRef fname = F->getName();
+
+                if (fname == "llvm.dbg.declare") {
+                    
+                    AllocaInst *AI = nullptr;
+                    DIVariable  *V = nullptr;
+                    Metadata *meta0 = cast<MetadataAsValue>(CI->getOperand(0))->getMetadata();
+                    if (isa<ValueAsMetadata>(meta0))  {
+                        Value *v0 = cast<ValueAsMetadata>(meta0)->getValue();
+                        if (isa<AllocaInst>(v0)) {
+                            AI = cast<AllocaInst>(v0);
+                        }
+                    }
+
+                    Metadata *meta1 = cast<MetadataAsValue>(CI->getOperand(1))->getMetadata();
+                    if (isa<DIVariable>(meta1))
+                        V = cast<DIVariable>(meta1);
+
+                    if (AI && V) {
+                        stack_vars[AI] = V;
+                    }
+                }
+
                 if (fname == "regptr" || fname == "deregptr" ||
                     fname == "voidcallstack" || fname == "checkstackvar"||
                     fname.find("llvm.") == 0 || fname.find("clang") == 0)
                     continue;
 
-                calls_to_instr.insert(CI);
+                calls_to_instr.push_back(CI);
                 LOG(LVL_DEBUG) << "Void: "<< *CI << "\n";
 
             }
+
         }
 
         for (CallInst *CI : calls_to_instr) {
             
-            uint32_t cur_call = rand() & 0xffffffff;
-
             for (AllocaInst *AI: stack_ptrs) {
                 /*
                 if (isPotentiallyDefed(CI, &defs[AI]) &&
                         isPotentiallyUsed(CI, &uses[AI], &defs[AI])) {
                         */
-                if (isPotentiallyUsed(CI, &uses[AI], &defs[AI])) {
-                    instrCheck(CI, AI, cur_call);
+                if (isPotentiallyUsed(CI, uses[AI], defs[AI])) {
+                    //LOG(LVL_INFO) << *CI << " " << *AI << "\n";
+                    instrCheck(CI, AI);
                 }
             }
             instrVoid(CI);
