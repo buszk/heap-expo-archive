@@ -641,6 +641,7 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
     std::set<AllocaInst*> stack_ptrs;
     std::map<AllocaInst*, DIVariable*> stack_vars;
     std::vector<CallInst*> calls_to_instr;
+    std::map<AllocaInst*, std::vector<StoreInst*>> stores_to_instr;
     std::map<AllocaInst*, std::set<Instruction*>> defs;
     std::map<AllocaInst*, std::set<Instruction*>> uses;
     
@@ -680,12 +681,11 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
 
                         if (isa<ConstantPointerNull>(SI->getValueOperand())) {
                             LOG(LVL_DEBUG) << "Value is a nullptr\n";
-                            stack_store_instr_cnt ++;
+                            //stack_store_instr_cnt ++;
                         } 
                         else  {
                             LOG(LVL_DEBUG) << "Value is a ptr\n";
-                            stack_store_instr_cnt++;
-                            instrStackReg(SI);
+                            stores_to_instr[AI].push_back(SI);
                         }
 
                     }
@@ -768,17 +768,36 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
 
         }
 
+
+        std::set<AllocaInst*> aset;
         for (CallInst *CI : calls_to_instr) {
+
+            bool v = false;
             
             for (AllocaInst *AI: stack_ptrs) {
                 if (isPotentiallyDefed(CI, defs[AI]) &&
                         isPotentiallyUsed(CI, uses[AI], defs[AI])) {
                 //if (isPotentiallyUsed(CI, uses[AI], defs[AI])) {
+                    //LOG(LVL_INFO) << "Defs: " << defs[AI].size() << ", Uses: " <<
+                        //uses[AI].size() << "\n";
                     instrCheck(CI, AI, stack_vars[AI]);
+                    aset.insert(AI);
+                    v = true;
                 }
             }
-            instrVoid(CI);
+            if (v) instrVoid(CI);
         }
+
+        int num = 0;
+        for (AllocaInst* AI : aset) {
+            num += defs[AI].size();
+            for (StoreInst* SI: stores_to_instr[AI]) {
+                instrStackReg(SI);
+                stack_store_instr_cnt++;
+            }
+        }
+
+        //LOG(LVL_INFO) << "Num store to instr: " << num << "\n";
 
 
         stack_ptrs.clear();
