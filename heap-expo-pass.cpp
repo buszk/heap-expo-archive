@@ -137,6 +137,10 @@ static void addToGlobalCtors(Module *M, Function* F) {
         
 }
 
+/* 
+ * Class for register all global variables in Module.
+ * A global ctor function with global_hook functions is created
+ */
 struct HeapExpoGlobalTracker : public ModulePass {
     static char ID;
 
@@ -438,7 +442,10 @@ static void logVarID(int fd, DIVariable *V, uint32_t cur_call) {
 
 }
 
-
+/*
+ * Base function for our pointer tracker classes
+ * Provide functionalities of instrumenting HeapExpo functions
+ */
 struct HeapExpoFuncTracker : public FunctionPass  {
     bool initialized;
     Module *M;
@@ -637,7 +644,98 @@ struct HeapExpoFuncTracker : public FunctionPass  {
 
 };
 
-struct HeapExpoStackTracker : public HeapExpoFuncTracker {
+/* 
+ * Helper class for call graph analysis
+ * We conservatively anlysis if a call instr would free any claimed dynamic mem
+ */
+struct CallGraphAnalysis {
+    std::set<std::string> external;
+    std::set<std::string> may_free = {"free", "realloc", "_ZdlPv", "_ZdaPv"};
+    std::set<std::string> not_free = {"malloc", "_Znwm", "calloc"};
+    std::list<Function*> calls;
+
+    bool has_free_call(Function *F) {
+        
+        if (!F) return true;
+        
+        std::string fname = F->getName();
+
+        for (Function *Func : calls)
+            if (F == Func) {
+                return false;
+            }
+
+        if (may_free.find(fname) != may_free.end()) {
+            return true;
+        }
+        if (not_free.find(fname) != not_free.end()) {
+            return false;
+        }
+        if (external.find(fname) != external.end()) {
+            return true;
+        }
+
+        /* External function */
+        if (F->empty()) {
+            if (fname == "regptr"|| fname == "deregptr" ||
+                fname == "stack_regptr" || fname == "global_hook" ||
+                fname == "voidcallstack" || fname == "checkstackvar")
+                return false;
+            if (fname.find("llvm.") == 0 ||
+                fname.find("clang.") == 0)
+                return false;
+            external.insert(fname);
+            return true;
+        }
+
+        calls.push_back(F);
+        for (BasicBlock &B : *F) 
+            for (Instruction &Ins : B)  {
+                Instruction *I = &Ins;
+                if (isa<CallInst>(I)) {
+                    Function *CF = cast<CallInst>(I)->getCalledFunction();
+                    if (F != CF)
+                        if (has_free_call(CF))  {
+
+                            may_free.insert(fname);
+                            calls.pop_back();
+                            return true;
+                        }
+                }
+            }
+
+
+        calls.pop_back();
+        not_free.insert(fname);
+        return false;
+    }
+};
+
+/*
+ * A simple class used to show result of Call Graph Analysis
+ */
+struct HeapExpoCallGraphAnalysis: public FunctionPass, public CallGraphAnalysis {
+    static char ID;
+
+    HeapExpoCallGraphAnalysis (): FunctionPass(ID) {}
+
+
+    virtual bool runOnFunction(Function &Func) {
+
+        Function *F = &Func;
+        LOG(LVL_INFO) << F->getName() << " " << has_free_call(F) << "\n";
+
+        return false;
+    }
+
+};
+
+
+/* 
+ * Class that examines important local pointer variables 
+ * And register them to suppress them from lift to LLVM reg
+ */
+struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalysis {
     static char ID;
     std::set<AllocaInst*> stack_ptrs;
     std::map<AllocaInst*, DIVariable*> stack_vars;
@@ -646,9 +744,7 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
     std::map<AllocaInst*, std::set<Instruction*>> defs;
     std::map<AllocaInst*, std::set<Instruction*>> uses;
     
-    HeapExpoStackTracker (): HeapExpoFuncTracker(ID) {
-        
-    }
+    HeapExpoStackTracker () : HeapExpoFuncTracker(ID) {}
     
     virtual bool runOnFunction(Function &F) {
 
@@ -763,7 +859,8 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
 
                 }
 
-                calls_to_instr.push_back(CI);
+                if (has_free_call(F))
+                    calls_to_instr.push_back(CI);
 
             }
 
@@ -778,9 +875,7 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
             for (AllocaInst *AI: stack_ptrs) {
                 if (isPotentiallyDefed(CI, defs[AI]) &&
                         isPotentiallyUsed(CI, uses[AI], defs[AI])) {
-                //if (isPotentiallyUsed(CI, uses[AI], defs[AI])) {
-                    //LOG(LVL_INFO) << "Defs: " << defs[AI].size() << ", Uses: " <<
-                        //uses[AI].size() << "\n";
+
                     instrCheck(CI, AI, stack_vars[AI]);
                     aset.insert(AI);
                     v = true;
@@ -798,9 +893,6 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
             }
         }
 
-        //LOG(LVL_INFO) << "Num store to instr: " << num << "\n";
-
-
         stack_ptrs.clear();
         uses.clear();
         defs.clear();
@@ -811,6 +903,10 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker {
 
 };
 
+/*
+ * Class for register Heap pointers on .data and .heap sections
+ * regptr and deregptr inserted to track propagation to these sections
+ */
 struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
     static char ID;
 
@@ -867,80 +963,6 @@ struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
     
 };
 
-struct HeapExpoCallGraphAnalysis: public FunctionPass {
-    static char ID;
-    std::set<std::string> external;
-    std::set<std::string> may_free = {"free", "realloc", "_ZdlPv", "_ZdaPv"};
-    std::set<std::string> not_free = {"malloc", "_Znwm", "calloc"};
-    std::list<Function*> calls;
-
-    HeapExpoCallGraphAnalysis (): FunctionPass(ID) {}
-
-    bool has_free_call(Function *F) {
-        
-        if (!F) return true;
-        
-        std::string fname = F->getName();
-
-        for (Function *Func : calls)
-            if (F == Func) {
-                return false;
-            }
-
-        if (may_free.find(fname) != may_free.end()) {
-            return true;
-        }
-        if (not_free.find(fname) != not_free.end()) {
-            return false;
-        }
-        if (external.find(fname) != external.end()) {
-            return true;
-        }
-
-        /* External function */
-        if (F->empty()) {
-            if (fname == "regptr"|| fname == "deregptr" ||
-                fname == "stack_regptr" || fname == "global_hook" ||
-                fname == "voidcallstack" || fname == "checkstackvar")
-                return false;
-            if (fname.find("llvm.") == 0 ||
-                fname.find("clang.") == 0)
-                return false;
-            external.insert(fname);
-            return true;
-        }
-
-        calls.push_back(F);
-        for (BasicBlock &B : *F) 
-            for (Instruction &Ins : B)  {
-                Instruction *I = &Ins;
-                if (isa<CallInst>(I)) {
-                    Function *CF = cast<CallInst>(I)->getCalledFunction();
-                    if (F != CF)
-                        if (has_free_call(CF))  {
-
-                            may_free.insert(fname);
-                            calls.pop_back();
-                            return true;
-                        }
-                }
-            }
-
-
-        calls.pop_back();
-        not_free.insert(fname);
-        return false;
-    }
-
-    virtual bool runOnFunction(Function &Func) {
-
-        Function *F = &Func;
-        LOG(LVL_INFO) << F->getName() << " " << has_free_call(F) << "\n";
-
-        return false;
-    }
-
-};
 }
 
 
@@ -951,6 +973,7 @@ char HeapExpoGlobalTracker::ID = 1;
 char HeapExpoHeapTracker::ID = 2;
 char HeapExpoStackTracker::ID = 3;
 char HeapExpoCallGraphAnalysis::ID = 4;
+
 static RegisterPass<HeapExpoGlobalTracker> X("HeapExpoGlobal", "HeapExpo Global Pass",
                              false /* Only looks at CFG */,
                              false /* Analysis Pass */);
@@ -971,11 +994,12 @@ static void registerMyPass(const PassManagerBuilder &,
 
 static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
-    //PM.add(new HeapExpoStackTracker());
-    //PM.add(new HeapExpoHeapTracker());
-    PM.add(new HeapExpoCallGraphAnalysis());
+    PM.add(new HeapExpoStackTracker());
+    PM.add(new HeapExpoHeapTracker());
+    //PM.add(new HeapExpoCallGraphAnalysis());
 }
 
+/* EarlyAsPossible is enabled with opt level 0 */
 static RegisterStandardPasses
     RegisterMyPassEarly(PassManagerBuilder::EP_EarlyAsPossible,
             registerMyPassEarly);
