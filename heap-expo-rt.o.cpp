@@ -37,6 +37,7 @@
 using namespace std;
 
 #define AFL
+#define CATCHERRORS
 
 #ifdef AFL
 #include "afl-include.h"
@@ -45,6 +46,10 @@ using namespace std;
 ESP_ST char  __heap_expo_initial[HE_MAP_SIZE];
 ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
 #endif 
+
+#ifdef CATCHERRORS
+#include <signal.h>
+#endif
 
 
 using motype = he_map<uintptr_t, struct object_info_t>;
@@ -118,6 +123,22 @@ EXT_C void msg(const char* str) {
     __printf(3, str);
 #endif
 }
+
+#ifdef CATCHERRORS
+void segfault_sigaction(int signal, siginfo_t *si, void *arg)
+{
+    uintptr_t addr = (uintptr_t) si->si_addr;
+    if ((addr & KADDR) == KADDR) {
+        PRINTF(1, "[HeapExpo] Use-after-free detected: %016lx\n", addr);
+        exit(139);
+    }
+    else {
+        PRINTF(1, "[HeapExpo] Unknown segfault: %016lx\n", addr);
+        exit(139);
+    }
+}
+#endif
+
 void print_memory_objects() {
     SLOCK(obj_mutex);
     PRINTF(3, "Objects List:\n");
@@ -222,6 +243,15 @@ void __attribute__((constructor (1))) init_rt(void) {
     fdcopy = dup(2);
 
     init_global_vars();
+
+#ifdef CATCHERRORS
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(struct sigaction));
+	sigemptyset(&sa.sa_mask);
+	sa.sa_sigaction = segfault_sigaction;
+	sa.sa_flags   = SA_SIGINFO;
+	sigaction(SIGSEGV, &sa, NULL);
+#endif
 
 #ifdef AFL
     __heap_expo_shm();
