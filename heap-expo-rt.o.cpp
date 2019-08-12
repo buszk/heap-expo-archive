@@ -20,6 +20,7 @@
 #include "hash.h"
 #include <execinfo.h>
 
+
 /*
  * LVL0: Production
  * LVL1: Debug version, need to set env HEAP_EXPO_DEBUG
@@ -54,6 +55,8 @@ ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
 
 using motype = he_map<uintptr_t, struct object_info_t>;
 ESP_ST motype *memory_objects;
+using moftype = he_unordered_map<uintptr_t, struct object_info_t*>;
+ESP_ST moftype *memory_objects_fast;
 
 using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
 ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr 
@@ -79,6 +82,9 @@ ESP_ST shared_mutex sig_mutex;
 
 ESP_ST bool he_initialized = false;
 ESP_ST int status = 0;
+
+ESP_ST uint64_t head = 0;
+ESP_ST uint64_t nohead = 0;
 
 /* 
  * 0 for not initialized
@@ -199,13 +205,16 @@ EXT_C void global_hook(char* addr, size_t size) {
     uintptr_t ptr = (uintptr_t)addr;
     PRINTF(3, "[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
     LOCK(obj_mutex);
-    memory_objects->insert(make_pair<>(ptr, object_info_t(size, GLOBAL)));
+    auto it = memory_objects->insert(make_pair<>(ptr, object_info_t(size, GLOBAL)));
+    memory_objects_fast->insert(make_pair<>(ptr, &it.first->second));
     UNLOCK(obj_mutex);
 }
 
 inline void init_global_vars() {
 
     INT_MALLOC(memory_objects, motype); 
+    
+    INT_MALLOC(memory_objects_fast, moftype); 
 
     INT_MALLOC(ptr_record, prtype);
     ptr_record->reserve(1024);
@@ -263,6 +272,7 @@ void __attribute__((constructor (1))) init_rt(void) {
 void __attribute__((destructor (65535))) fini_rt(void) {
 
     //print_heap();
+    PRINTF(0, "head vs nohead is %lu:%lu\n", head, nohead);
 
     /* 
      * These frees may cause double free. 
@@ -394,7 +404,8 @@ inline uint32_t get_signature() {
 
 inline void alloc_hook_(uintptr_t ptr, size_t size, uint32_t sig) {
     /* Add heap object to memory_objects. Simple */
-    memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP, sig)));
+    auto it = memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP, sig)));
+    memory_objects_fast->insert(make_pair<>(ptr, &it.first->second));
 }
 
 /* XXX: unwind stack */
@@ -547,6 +558,8 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     moit->second.out_edges.clear();
 
     memory_objects->erase(moit);
+    
+    memory_objects_fast->erase(ptr);
    
 }
 
@@ -648,8 +661,6 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
             if (!it->second.invalid) {
 
                 assert (it->second.dst_info);
-                assert (memory_objects->find(it->second.dst_obj) != memory_objects->end());
-                assert (it->second.dst_info == &memory_objects->at(it->second.dst_obj));
                 LOCK(it->second.dst_info->in_mutex);
                 if (! it->second.dst_info->in_edges.erase(ptr_loc))
                     assert(false && "in edge problem");
@@ -687,15 +698,26 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
  * this ptr_val points to as long as it's with the range
  */
 bool get_object_addr(uintptr_t addr, uintptr_t &object_addr, struct object_info_t* &object_info) {
+
+    auto fast_it  = memory_objects_fast->find(addr);
+    if (fast_it != memory_objects_fast->end()) {
+        object_addr = addr;
+        object_info = fast_it->second;
+        head++;
+        return 1;
+    }
+
     auto it = memory_objects->upper_bound(addr);
     if (it == memory_objects->begin()) {
         return 0;
     }
     it--;
     int diff = addr - it->first;
+    if (diff == 0) head++;
     if (diff >= 0 && diff < it->second.size) {
         object_addr = it->first;
         object_info = &it->second;
+        nohead++;
         return 1;
     }
     return 0;
