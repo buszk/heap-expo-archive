@@ -178,6 +178,7 @@ struct object_info_t {
     }
     
     object_info_t &operator=(const object_info_t &copy) {
+        memset(this, 0, sizeof (object_info_t));
         addr = copy.addr;
         size = copy.size;
         type = copy.type;
@@ -189,13 +190,19 @@ struct object_info_t {
         new(&in_edges) edge_type;
         new(&out_edges) edge_type;
         new(&stack_edges) stack_edge_type;
+#ifdef MULTITHREADING
+        new(&in_mutex) std::shared_mutex;
+        new(&out_mutex) std::shared_mutex;
+        new(&stack_mutex) std::shared_mutex;
+#endif
         signature = copy.signature;
         return *this;
     }
 };
 
 struct pointer_info_t {
-    uintptr_t             value    ,
+    uintptr_t             loc      ,
+                          value    ,
                           src_obj  ,
                           dst_obj  ;
     bool                  invalid  ;
@@ -204,18 +211,20 @@ struct pointer_info_t {
     uint32_t              id       ;
 
     pointer_info_t () {
-        value = src_obj = dst_obj = invalid = id = 0;
+        loc = value = src_obj = dst_obj = invalid = id = 0;
         src_info = dst_info = NULL;
     }
 
-    pointer_info_t (uintptr_t v) {
+    pointer_info_t (uintptr_t l, uintptr_t v) {
+        loc = l;
         value = v;
         src_obj = dst_obj = invalid = id = 0;
         src_info = dst_info = NULL;
     }
 
-    pointer_info_t (uintptr_t v, uintptr_t s, uintptr_t d,
+    pointer_info_t (uintptr_t l, uintptr_t v, uintptr_t s, uintptr_t d,
             struct object_info_t *si, struct object_info_t *di, uint32_t i) {
+        loc = l;
         value = v;
         src_obj = s;
         dst_obj = d;
@@ -226,6 +235,7 @@ struct pointer_info_t {
     } 
 
     pointer_info_t (const pointer_info_t &copy) {
+        loc = copy.loc;
         value = copy.value;
         src_obj = copy.src_obj;
         dst_obj = copy.dst_obj;
