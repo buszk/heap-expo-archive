@@ -18,6 +18,7 @@
 
 #include "rt-malloc.h"
 #include "rt-include.h"
+#include "shadow.h"
 #include "hash.h"
 
 
@@ -653,7 +654,7 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
             ptr_record->erase(it);
 
         }
-        new_info->out_edges.clear();
+        old_info->out_edges.clear();
 
     }
     if (oldptr)
