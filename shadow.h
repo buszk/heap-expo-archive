@@ -1,5 +1,18 @@
 #include <assert.h>
 #include "rt-include.h"
+
+#define NUM_CHILD 256
+#ifdef __x86_64__
+#define PTR_BYTE 8
+#define PTR_BITS 64
+#define LAST_NUM_CHILD 32
+#else 
+#define PTR_BYTE 4
+#define PTR_BITS 32
+#define LAST_NUM_CHILD 64
+#endif
+
+#define NUM_CHILD_LEVEL(x) (x==PTR_BYTE-2)?LAST_NUM_CHILD:NUM_CHILD
 template<class T>
 class shadow {
 
@@ -8,14 +21,15 @@ class shadow {
             node* next;
             T* data;
         } u;
+        uint8_t leaf;
     } node;
 
-    node root[256] = {};
+    node root[NUM_CHILD] = {};
 
     void cleanup(node* list, int level) {
         if (level == sizeof(uintptr_t) -1 )
             return;
-        for (int i = 0; i < 256; i++) {
+        for (int i = 0; i < NUM_CHILD_LEVEL(level); i++) {
             if (list[i].u.next) {
                 cleanup(list[i].u.next, level + 1);
                 __free(list[i].u.next);
@@ -59,10 +73,7 @@ void shadow<T>::insert(uintptr_t addr, T* meta) {
     for (int i = 0; i < sizeof(uintptr_t) -1 ; i ++) {
         uint8_t c = (addr >> (sizeof (uintptr_t) - i-1)*8) & 0xff;
         if (!cur[c].u.next) {
-            if (i == sizeof(uintptr_t) -2)
-                cur[c].u.next = (node*)__calloc(sizeof(node), 32);
-            else 
-                cur[c].u.next = (node*)__calloc(sizeof(node), 256);
+            cur[c].u.next = (node*)__calloc(sizeof(node), NUM_CHILD_LEVEL(i));
         }
         cur = cur[c].u.next;
     }
