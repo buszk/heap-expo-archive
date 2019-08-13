@@ -14,11 +14,11 @@
 #else
 #include <libunwind-x86.h>
 #endif
-
-#include "rt-include.h"
-#include "rt-malloc.h"
-#include "hash.h"
 #include <execinfo.h>
+
+#include "rt-malloc.h"
+#include "rt-include.h"
+#include "hash.h"
 
 
 /*
@@ -53,11 +53,10 @@ ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
 #endif
 
 
-using motype = he_map<uintptr_t, struct object_info_t>;
+using motype = shadow<struct object_info_t>;
 ESP_ST motype *memory_objects;
-using moftype = he_unordered_map<uintptr_t, struct object_info_t*>;
-ESP_ST moftype *memory_objects_fast;
 
+//using prtype = shadow<struct pointer_info_t>;
 using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
 ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr 
 
@@ -145,38 +144,6 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg)
 }
 #endif
 
-void print_memory_objects() {
-    SLOCK(obj_mutex);
-    PRINTF(3, "Objects List:\n");
-    for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
-        PRINTF(3, "%s Object: %016lx:%016lx\n", getTypeString(it->second.type), it->first, it->second.size);
-    }
-    SUNLOCK(obj_mutex);
-}
-
-void print_edges() {
-    PRINTF(3, "Edges List:\n");
-    SLOCK(obj_mutex);
-    SLOCK(ptr_mutex);
-    for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
-        for (uintptr_t ptr_loc: it->second.out_edges) {
-            assert(ptr_record->find(ptr_loc) != ptr_record->end() && "ptr_record does not have this ptr");
-            PRINTF(3, "Heap Edge: %016lx->%016lx\n", it->first, ptr_record->at(ptr_loc).dst_obj);
-        }
-    }
-    SUNLOCK(ptr_mutex);
-    SUNLOCK(obj_mutex);
-}
-
-EXT_C void print_heap() {
-
-    print_memory_objects();
-    print_edges();
-
-}
-
-        
-
 void __heap_expo_shm() {
 
     char *id_str = getenv(HE_SHM_ENV_VAR);
@@ -200,13 +167,15 @@ inline bool is_invalid(uintptr_t addr) {
 
 
 bool get_object_addr(uintptr_t, uintptr_t&, struct object_info_t *&);
+
 EXT_C void global_hook(char* addr, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)addr;
     PRINTF(3, "[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
     LOCK(obj_mutex);
-    auto it = memory_objects->insert(make_pair<>(ptr, object_info_t(size, GLOBAL)));
-    memory_objects_fast->insert(make_pair<>(ptr, &it.first->second));
+    auto obj = (struct object_info_t*)__malloc(sizeof(struct object_info_t));
+    *obj = object_info_t(ptr, size, GLOBAL);
+    memory_objects->insert_range(ptr, size, obj);
     UNLOCK(obj_mutex);
 }
 
@@ -214,8 +183,6 @@ inline void init_global_vars() {
 
     INT_MALLOC(memory_objects, motype); 
     
-    INT_MALLOC(memory_objects_fast, moftype); 
-
     INT_MALLOC(ptr_record, prtype);
     ptr_record->reserve(1024);
 
@@ -404,8 +371,9 @@ inline uint32_t get_signature() {
 
 inline void alloc_hook_(uintptr_t ptr, size_t size, uint32_t sig) {
     /* Add heap object to memory_objects. Simple */
-    auto it = memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP, sig)));
-    memory_objects_fast->insert(make_pair<>(ptr, &it.first->second));
+    auto obj = (struct object_info_t*)__malloc(sizeof(object_info_t));
+    *obj = object_info_t(ptr, size, HEAP, sig);
+    memory_objects->insert_range(ptr, size, obj);
 }
 
 /* XXX: unwind stack */
@@ -426,20 +394,20 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
 
 inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
-    auto moit = memory_objects->find(ptr);
+    struct object_info_t *obj = memory_objects->find(ptr);
 
 
     /* Not very likely but ptr may be allocated by other libraries */
-    if (moit == memory_objects->end()) {
+    if (!obj) {
         return;
     }
 
-    PRINTF(3, "[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
+    PRINTF(3, "[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", obj->addr, obj->size, obj->signature);
 
     rtype tmp; 
     /* Invalidate ptrs that point to this heap object */
-    SLOCK(moit->second.in_mutex);
-    for (uintptr_t ptr_loc: moit->second.in_edges) {
+    SLOCK(obj->in_mutex);
+    for (uintptr_t ptr_loc: obj->in_edges) {
         auto it = ptr_record->find(ptr_loc);
         if (it == ptr_record->end()) {
             PRINTF(3, "Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
@@ -498,7 +466,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     asm("\t movl %%esp,%0" : "=r"(sp));
 #endif
 
-    for (auto const& x: moit->second.stack_edges) {
+    for (auto const& x: obj->stack_edges) {
 
         uintptr_t ptr_loc = x.first;
         uint32_t  id = x.second;
@@ -512,7 +480,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         if (!stack_record || stack_record->find(ptr_loc) == stack_record->end())  {
             continue;
         }
-        if (cur_val >= moit->first && cur_val < moit->first + moit->second.size) {
+        if (cur_val >= obj->addr && cur_val < obj->addr + obj->size) {
             if (invalidate_mode > 1)
                 *(uintptr_t*)ptr_loc = cur_val | KADDR; 
             
@@ -528,15 +496,15 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     }
 
 
-    SUNLOCK(moit->second.in_mutex);
-    LOCK(moit->second.in_mutex);
-    moit->second.in_edges.clear();
-    UNLOCK(moit->second.in_mutex);
+    SUNLOCK(obj->in_mutex);
+    LOCK(obj->in_mutex);
+    obj->in_edges.clear();
+    UNLOCK(obj->in_mutex);
 
     /* Erase ptrs in this heap object */
-    for (uintptr_t ptr_loc: moit->second.out_edges) {
+    for (uintptr_t ptr_loc: obj->out_edges) {
         auto it = ptr_record->find(ptr_loc);
-        PRINTF(3, "[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, moit->first);
+        PRINTF(3, "[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, obj->addr);
         assert(it != ptr_record->end());
         if (!it->second.invalid) {
             struct object_info_t *dst_obj_info = it->second.dst_info;
@@ -555,11 +523,11 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     }
 
 
-    moit->second.out_edges.clear();
+    obj->out_edges.clear();
 
-    memory_objects->erase(moit);
+    memory_objects->insert_range(obj->addr, obj->size, nullptr);
+    //__free(obj);
     
-    memory_objects_fast->erase(ptr);
    
 }
 
@@ -600,23 +568,25 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
         get_signature();
     PRINTF(3, "[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
     LOCK(obj_mutex);
-    if (offset == 0) {
-        memory_objects->at(newptr).size = newsize;
+
+    struct object_info_t *old_info = memory_objects->find(oldptr);
+    if (offset == 0 && old_info) {
+        assert(old_info->addr == newptr);
+        memory_objects->find(newptr)->size = newsize;
         UNLOCK(obj_mutex);
         return;
     }
     LOCK(ptr_mutex);
     
-    if (newptr)
+    if (newptr && newsize)
         alloc_hook_(newptr, newsize, sig);
+    struct object_info_t *new_info = memory_objects->find(newptr);
 
     //size_t oldsize = memory_objects[oldptr].size;
 
-    if (newptr && oldptr) {
+    if (newptr && oldptr && old_info) {
         /* Iterate every objects old object points to */
-        for (uintptr_t ptr_loc: memory_objects->at(oldptr).out_edges) {
-
-
+        for (uintptr_t ptr_loc: old_info->out_edges) {
 
             /* Update inedges */
 
@@ -674,16 +644,16 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
 
 
             /* Update outedges */
-            memory_objects->at(newptr).out_edges.insert(ptr_loc+offset);
+            new_info->out_edges.insert(ptr_loc+offset);
 
             /* Update ptr_record */
             ptr_record->insert(make_pair<>(ptr_loc+offset, it->second));
             ptr_record->at(ptr_loc+offset).src_obj += offset;
-            ptr_record->at(ptr_loc+offset).src_info = &memory_objects->at(newptr);
+            ptr_record->at(ptr_loc+offset).src_info = new_info;
             ptr_record->erase(it);
 
         }
-        memory_objects->at(oldptr).out_edges.clear();
+        new_info->out_edges.clear();
 
     }
     if (oldptr)
@@ -699,27 +669,14 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
  */
 bool get_object_addr(uintptr_t addr, uintptr_t &object_addr, struct object_info_t* &object_info) {
 
-    auto fast_it  = memory_objects_fast->find(addr);
-    if (fast_it != memory_objects_fast->end()) {
-        object_addr = addr;
-        object_info = fast_it->second;
-        head++;
+    auto obj = memory_objects->find(addr);
+
+    if (obj) {
+        object_addr = obj->addr;
+        object_info = obj;
         return 1;
     }
 
-    auto it = memory_objects->upper_bound(addr);
-    if (it == memory_objects->begin()) {
-        return 0;
-    }
-    it--;
-    int diff = addr - it->first;
-    if (diff == 0) head++;
-    if (diff >= 0 && diff < it->second.size) {
-        object_addr = it->first;
-        object_info = &it->second;
-        nohead++;
-        return 1;
-    }
     return 0;
 }
 

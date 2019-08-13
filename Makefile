@@ -2,9 +2,9 @@ CC  = clang-7
 CXX = clang++-7
 LLVM_CONFIG ?= llvm-config-7
 
-CFLAGS     ?= -O3 -funroll-loops
+CFLAGS     ?= -O2 -funroll-loops
 CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign 
-CXXFLAGS   ?= -O3 -funroll-loops
+CXXFLAGS   ?= -O2 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 			 -Wno-variadic-macros -std=c++17
 

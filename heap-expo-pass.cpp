@@ -994,8 +994,8 @@ static void registerMyPass(const PassManagerBuilder &,
 
 static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
-    PM.add(new HeapExpoStackTracker());
     PM.add(new HeapExpoHeapTracker());
+    PM.add(new HeapExpoStackTracker());
     //PM.add(new HeapExpoCallGraphAnalysis());
 }
 

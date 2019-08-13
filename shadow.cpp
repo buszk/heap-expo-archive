@@ -64,31 +64,29 @@ public:
 template<class T>
 void shadow<T>::insert(uintptr_t addr, T* meta) {
     node *cur = root;
-    for (int i = 0; i < sizeof(uintptr_t)  ; i ++) {
+    for (int i = 0; i < sizeof(uintptr_t) -1 ; i ++) {
         uint8_t c = (addr >> (sizeof (uintptr_t) - i-1)*8) & 0xff;
         if (!cur[c].u.next) {
             cur[c].u.next = (node*)__calloc(sizeof(node), 256);
         }
-        if ( i == sizeof(uintptr_t) -1 ) {
-            cur[c].u.data = meta;
-        }
-        else {
-            cur = cur[c].u.next;
-        }
+        cur = cur[c].u.next;
     }
+    uint8_t c = (addr&0xff) >> 3;
+    cur[c].u.data = meta;
 }
 
 template<class T>
 T* shadow<T>::find(uintptr_t addr) {
     node *cur = root;
-    for (int i = 0; i < sizeof(uintptr_t)  ; i ++) {
+    for (int i = 0; i < sizeof(uintptr_t) -1  ; i ++) {
         uint8_t c = (addr >>  (sizeof (uintptr_t) - i-1)*8) & 0xff;
         if (cur[c].u.next) 
             cur = cur[c].u.next;
         else 
             return NULL;
     }
-    return (T*)cur;
+    uint8_t c = (addr&0xff) >> 3;
+    return cur[c].u.data;
 }
 
 inline uintptr_t compute_min(uintptr_t start, uint8_t mask, int level) {
@@ -120,8 +118,8 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
 
     //printf("start: %lx end: %lx level: %d\n", start, end, level);
     if (level == sizeof(uintptr_t) - 1) {
-        for (uint8_t i = (start&0xff); i <= (end&0xff); i++) {
-            //printf("Writing %lx at %lx\n", meta, (start>>8<<8) + i);
+        for (uint8_t i = ((start&0xff)>>3); i <= ((end&0xff)>>3); i++) {
+            printf("Writing %lx at %lx\n", meta, (start>>8<<8) + i);
             list[i].u.data = meta;
         }
         return;
@@ -133,7 +131,10 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
     //printf("c1: %x c2: %x\n", c1, c2);
     for (int j = c1; j <= c2; j++) {
         if (!cur[j].u.next)  {
-            cur[j].u.next = (node*)__calloc(sizeof(node), 256);
+            if (level == sizeof(uintptr_t)-2) 
+                cur[j].u.next = (node*)__calloc(sizeof(node), 32);
+            else 
+                cur[j].u.next = (node*)__calloc(sizeof(node), 256);
         }
         cur = cur[j].u.next;
         insert_range_level(std::max(start, compute_min(start, j, level)),
