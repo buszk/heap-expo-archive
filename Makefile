@@ -22,7 +22,7 @@ INST_LFL    = $(LDFLAGS) heap-expo-rt.o -lstdc++ # force c++ linker
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS) -Iinclude
 CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
 
-PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o afl-heap-expo-map
+PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o afl-heap-expo-map shadow-test
 
 PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so $(LTOFLAG)
 
@@ -38,21 +38,27 @@ LLVMHeapExpo.so: heap-expo-pass.cpp
 afl-heap-expo-map: afl-heap-expo-map.cpp
 	$(CXX) $(CXXFLAGS) $< -o $@ -Iinclude
 
-heap-expo-rt.o: heap-expo-rt.o.cpp
+heap-expo-rt.o: heap-expo-rt.o.cpp shadow.h
 	$(CXX) $(CXXFLAGS) $(RTFLAGS) -fPIC -c $< -o $@
 	$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -fPIC -c $< -o $(@:.o=-mt.o)
 
-heap-expo-rt-32.o: heap-expo-rt.o.cpp
+heap-expo-rt-32.o: heap-expo-rt.o.cpp shadow.h
 	@printf "[*] Building 32-bit variant of the runtime (-m32)... "
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) -m32 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -m32 -fPIC -c $< -o $(@:.o=-mt.o) 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
 
 
-heap-expo-rt-64.o: heap-expo-rt.o.cpp
+heap-expo-rt-64.o: heap-expo-rt.o.cpp shadow.h
 	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -m64 -fPIC -c $< -o $(@:.o=-mt.o) 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+
+shadow-test: shadow-test.cpp shadow.h
+	$(CXX) -g -O0 $(RTFLAGS) $< -o $@
+
+test_shadow:
+	./shadow-test
 
 test_build: $(PROGS)
 	./heap-expo-clang ./test-instr.c -o test-instr

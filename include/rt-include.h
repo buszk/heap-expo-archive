@@ -8,6 +8,7 @@
 #include <list>
 #include <unordered_map>
 #include <shared_mutex>
+#include <cstring>
 
 #define EXT_C extern "C"
 
