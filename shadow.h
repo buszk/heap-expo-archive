@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include "rt-include.h"
+#include <mutex>
 
 #define NUM_CHILD 256
 #ifdef __x86_64__
@@ -24,6 +25,9 @@ class shadow {
             T* data;
         } u;
         uint8_t leaf;
+#ifdef MULTITHREADING
+        std::mutex lock; // lock for pointer
+#endif
     } node;
 
     node root[NUM_CHILD] = {};
@@ -82,7 +86,16 @@ void shadow<T>::insert(uintptr_t addr, T* meta) {
     for (int i = 0; i < sizeof(uintptr_t) -1 ; i ++) {
         uint8_t c = (addr >> (sizeof (uintptr_t) - i-1)*8) & 0xff;
         if (!cur[c].u.next) {
-            cur[c].u.next = ALLOC_NODES(NUM_CHILD_LEVEL(i+1));
+#ifdef MULTITHREADING
+            cur[c].lock.lock();
+            if (!cur[c].u.next) {
+#endif
+                cur[c].u.next = ALLOC_NODES(NUM_CHILD_LEVEL(i+1));
+                cur[c].leaf = 0;
+#ifdef MULTITHREADING
+            }
+            cur[c].lock.unlock();
+#endif
         }
         cur = cur[c].u.next;
     }
@@ -162,7 +175,18 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
             continue;
         }
         if (!cur[j].u.next)  {
-            cur[j].u.next = ALLOC_NODES(NUM_CHILD_LEVEL(level+1));
+#ifdef MULTITHREADING
+            cur[j].lock.lock();
+            //write(2, "lock\n", 5);
+            if (!cur[j].u.next) {
+#endif
+                cur[j].u.next = ALLOC_NODES(NUM_CHILD_LEVEL(level+1));
+                cur[j].leaf = 0;
+#ifdef MULTITHREADING
+            }
+            cur[j].lock.unlock();
+            //write(2, "unlock\n", 7);
+#endif
         }
         insert_range_level(std::max(start, compute_min(start, j, level)),
                            std::min(end, compute_max(end, j, level)),          

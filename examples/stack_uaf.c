@@ -8,17 +8,20 @@
 
 int main(int argc, char **argv) {   
     char *buf1;
-    char *buf2;
+    char * buf2;
     char *buf3;
 
     buf1 = (char *) malloc(BUFSIZE);
     buf2 = (char *) malloc(BUFSIZE);
 
+    buf2[0] = '2';
+
     free(buf2);
 
     buf3 = (char *) malloc(BUFSIZE);
+    *buf3 = '3';
     char c = *buf2;
 
-    printf("%c\n", c);
+    printf("%p: %c, %d\n", buf2, c, c);
 
 }

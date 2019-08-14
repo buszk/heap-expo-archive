@@ -120,8 +120,8 @@ static const char* getTypeString(int typeVal) {
     return memory_type_strings[typeVal];
 }
 
-using edge_type = he_unordered_set<uintptr_t>;
-using stack_edge_type = he_unordered_map<uintptr_t, uint32_t>;
+using edge_type = he_list<uintptr_t>;
+using stack_edge_type = he_map<uintptr_t, uint32_t>;
 
 struct object_info_t {
     uintptr_t                   addr      ;
@@ -209,6 +209,8 @@ struct pointer_info_t {
     bool                  invalid  ;
     struct object_info_t *src_info ,
                          *dst_info ;
+    edge_type::iterator   src_it   ,
+                          dst_it   ;
     uint32_t              id       ;
 
     pointer_info_t () {
@@ -224,13 +226,17 @@ struct pointer_info_t {
     }
 
     pointer_info_t (uintptr_t l, uintptr_t v, uintptr_t s, uintptr_t d,
-            struct object_info_t *si, struct object_info_t *di, uint32_t i) {
+            struct object_info_t *si, struct object_info_t *di, 
+            edge_type::iterator sit, edge_type::iterator dit,
+            uint32_t i) {
         loc = l;
         value = v;
         src_obj = s;
         dst_obj = d;
         src_info = si;
         dst_info = di;
+        src_it = sit;
+        dst_it = dit;
         id = i;
         invalid = 0;
     } 
@@ -242,6 +248,8 @@ struct pointer_info_t {
         dst_obj = copy.dst_obj;
         src_info = copy.src_info;
         dst_info = copy.dst_info;
+        src_it = copy.src_it;
+        dst_it = copy.dst_it;
         invalid = copy.invalid;
         id = copy.id;
     }
