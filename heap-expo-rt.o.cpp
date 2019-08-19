@@ -484,6 +484,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
     PRINTF(3, "[HeapExpo] %d stack pointers registered\n", obj->stack_edges.size());
 
+    LOCK(obj->stack_mutex);
     for (auto it = obj->stack_edges.rbegin(); 
          it != obj->stack_edges.rend(); it++) {
 
@@ -514,6 +515,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
         }
     }
+    UNLOCK(obj->stack_mutex);
 
 
     SUNLOCK(obj->in_mutex);
@@ -589,10 +591,9 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     
 
     struct object_info_t *old_info = memory_objects->find(oldptr);
-    if (offset == 0 && old_info) {
+    if (offset == 0 && old_info && old_info && old_info->addr == oldptr) {
         assert(old_info->addr == newptr);
         memory_objects->find(newptr)->size = newsize;
-        
         return;
     }
     

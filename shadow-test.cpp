@@ -9,8 +9,10 @@ int main() {
         shadow<uint64_t> s;
         s.insert((uintptr_t)&t, &t);
         assert(*s.find((uintptr_t)&t) == t);
-        s.insert((uintptr_t)&v, &v);
+        s.insert_range((uintptr_t)&v, 2*sizeof(uintptr_t), &v);
         assert(*s.find((uintptr_t)&v) == v);
+        assert(*s.find((uintptr_t)&v+8) == v);
+        assert(s.find((uintptr_t)&v+0x10) == nullptr);
     }
     printf("Passed\n");
 }

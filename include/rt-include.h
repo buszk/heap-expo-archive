@@ -11,6 +11,8 @@
 #include <cstring>
 
 #define EXT_C extern "C"
+#define UNUSED __attribute__((unused))
+
 
 #define __malloc            __libc_malloc
 #define __free              __libc_free
@@ -116,7 +118,7 @@ enum memory_type_e { UNKNOWN, GLOBAL, HEAP, STACK };
 
 static const char* memory_type_strings[] = { "Unknow", "Global", "Heap", "Stack" };
 
-static const char* getTypeString(int typeVal) {
+UNUSED static const char* getTypeString(int typeVal) {
     return memory_type_strings[typeVal];
 }
 
