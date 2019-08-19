@@ -940,7 +940,7 @@ struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
                             
                         if (isa<Constant>(SI->getValueOperand())) {
                             store_const_global_cnt++;
-                            break;
+                            continue;
                         }
 
                         if (isa<ConstantPointerNull>(SI->getValueOperand())) {
@@ -954,9 +954,22 @@ struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
                             instrReg(SI);
 
                         }
+
+                        SI->setVolatile(true);
                     }
                 }
             }
+            else if (isa<LoadInst> (I)) {
+                LoadInst *LI = cast<LoadInst> (I);
+    
+                if (LI->getPointerOperandType()->isPointerTy()) {
+                    if (!getStackPtr(LI->getPointerOperand())) {
+                        LI->setVolatile(true);
+                    }
+                }
+
+            }
+
         }
         return false;
     }
