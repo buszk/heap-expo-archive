@@ -5,8 +5,8 @@
 
 #define NUM_CHILD 256
 #ifdef __x86_64__ // 48-bit addressing
-#define PTR_BYTES 8
-#define PTR_BITS 64
+#define PTR_BYTES 6
+#define PTR_BITS 48
 #define LAST_NUM_CHILD 32
 #else 
 #define PTR_BYTES 4
@@ -19,8 +19,11 @@
 #define PTR_LAST_INDEX(ptr)             ((ptr & 0xff) >> 3)
 #define GET_PTR_BYTE(b, ptr, n)         b = (ptr >> (PTR_BYTES - n - 1)*8) & 0xff
 #define GET_PTR_LAST_INDEX(b, ptr)      b = ((ptr & 0xff) >> 3)
-
-#define LIST_OVERFLOW_CHECK(l, i)       if (malloc_usable_size(l)/sizeof(node) <= i) assert("__file__:__line__")
+#ifdef DEBUG
+#define LIST_OVERFLOW_CHECK(l, i)       if (l!=root && malloc_usable_size(l)/sizeof(node) <= i) assert(false)
+#else
+#define LIST_OVERFLOW_CHECK(l, i)
+#endif
 #define LIST_NODE(l, i)                 l[i]
 #define LIST_NODE_NEXT(l, i)            l[i].u.next
 #define LIST_NODE_DATA(l, i)            l[i].u.data
@@ -144,7 +147,7 @@ void shadow<T>::insert(uintptr_t addr, T* meta) {
     }
     GET_PTR_LAST_INDEX(c, addr);
     SET_LIST_NODE_DATA(cur, c, meta);
-    SET_LIST_NODE_LEAF(cur, c, 1);
+    SET_LIST_NODE_LEAF(cur, c, (meta!=nullptr));
 }
 
 template<class T>
@@ -204,6 +207,7 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
         for (uint8_t i = PTR_LAST_INDEX(start); i <= PTR_LAST_INDEX(end); i++) {
             //printf("Writing %lx at %lx\n", meta, (start>>8<<8) + i);
             SET_LIST_NODE_DATA(list, i, meta);
+            SET_LIST_NODE_LEAF(list, i, (meta!=nullptr));
         }
         return;
     }
@@ -215,19 +219,23 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
     for (int j = c1; j <= c2; j++) {
         if (start == compute_min(start, j, level) 
                 && end == compute_max(end, j, level)) {
+            // XXX
+            cleanup(LIST_NODE_NEXT(cur, j), level+1);
             SET_LIST_NODE_DATA(cur, j, meta);
-            if (meta != nullptr) {
-                SET_LIST_NODE_LEAF(cur, j, 1);
-            }
-            /*
-            char str[] = "shallow:  \n";
-            str[9] = level+'0';
-            write(2, str , sizeof(str));
-            */
+            SET_LIST_NODE_LEAF(cur, j, (meta!=nullptr));
+            //char str[] = "shallow:  \n";
+            //str[9] = level+'0';
+            //write(2, str , sizeof(str));
             continue;
         }
         LIST_OVERFLOW_CHECK(cur, j);
-        if (!LIST_NODE_NEXT(cur, j)) {
+        if (LIST_NODE_LEAF(cur, j)) {
+            assert( list!=nullptr && "Overwrite a leaf node in non-bottom level");
+            SET_LIST_NODE_DATA(list, j, meta);
+            SET_LIST_NODE_LEAF(list, j, (meta!=nullptr));
+            continue;
+        }
+        else if(!LIST_NODE_NEXT(cur, j)) {
 #ifdef MULTITHREADING
             LIST_NODE_LOCK(cur, j);
             //write(2, "lock\n", 5);

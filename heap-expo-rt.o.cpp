@@ -593,7 +593,17 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     struct object_info_t *old_info = memory_objects->find(oldptr);
     if (offset == 0 && old_info && old_info && old_info->addr == oldptr) {
         assert(old_info->addr == newptr);
-        memory_objects->find(newptr)->size = newsize;
+        size_t oldsize = old_info->size;
+        /* Modify shadow memory as well */
+        if (newsize > oldsize) {
+            /* Expand: insert metadata */
+            memory_objects->insert_range(oldptr+oldsize, newsize -oldsize, old_info);
+        }
+        else {
+            /* Shrink: remove metadata */
+            memory_objects->insert_range(oldptr+newsize, oldsize-newsize, nullptr);
+        }
+        old_info->size = newsize;
         return;
     }
     
