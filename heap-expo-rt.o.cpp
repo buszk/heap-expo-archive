@@ -507,6 +507,13 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     obj->out_edges.clear();
     obj->released = true;
 
+    for (auto &p: stack_record->list) {
+        if (p.dst_info == obj && p.val == *(uintptr_t*)p.loc) {
+            if (invalidate_mode > 1)
+                *(uintptr_t*)p.loc |= KADDR; 
+        }
+    }
+
     memory_objects->insert_range(obj->addr, obj->size, nullptr);
     //__free(obj);
     
@@ -838,14 +845,17 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
     uintptr_t cur_val = *(uintptr_t*)ptr_loc;
 
-    stack_pointer_t *ptr = stack_record->find(stack_pointer_t(ptr_loc));
 
+    /*
     if (id == 0x7155daf7) {
         PRINTF(0, "DEBUG %p\n", ptr);
         stack_record->check();
     }
     if (ptr && ptr->dst_info->addr <= cur_val && cur_val < ptr->dst_info->addr + ptr->dst_info->size
             && ptr->dst_info->released) {
+            */
+    if (is_invalid(cur_val)) {
+        stack_pointer_t *ptr = stack_record->find(stack_pointer_t(ptr_loc));
         uint32_t store_id = ptr->store_id;
         PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx] val[%016lx]\n", 
                 ptr_loc, id, store_id, cur_val);
