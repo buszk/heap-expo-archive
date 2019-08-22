@@ -14,11 +14,13 @@
 #else
 #include <libunwind-x86.h>
 #endif
-
-#include "rt-include.h"
-#include "rt-malloc.h"
-#include "hash.h"
 #include <execinfo.h>
+
+#include "rt-malloc.h"
+#include "rt-include.h"
+#include "shadow.h"
+#include "hash.h"
+
 
 /*
  * LVL0: Production
@@ -51,17 +53,28 @@ ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
 #include <signal.h>
 #endif
 
+#define push_back_it(list, elem) (list).insert((list.end()), (elem))
+#ifdef DEBUG
+#define erase_it(list, it) \
+    int flag = true; \
+    for (auto i = (list).begin(); i != (list).end(); i++) {\
+        if (*it == *i) \
+            flag = false; }\
+    assert(!flag); \
+    list.erase(it) 
+#else 
+#define erase_it(list, it)  (list).erase(it);
+#endif
 
-using motype = he_map<uintptr_t, struct object_info_t>;
+using motype = shadow<struct object_info_t>;
 ESP_ST motype *memory_objects;
 
-using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
+using prtype = shadow<struct pointer_info_t>;
+//using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
 ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr 
 
-using sptype = he_set<uintptr_t>;
+using sptype = he_sorted_list<stack_pointer_t, comp<stack_pointer_t>>;
 ESP_ST thread_local sptype *stack_record = NULL;
-using irtype = he_map<uintptr_t, uint32_t>;
-ESP_ST thread_local irtype *inval_record = NULL;
 
 using rtype = he_list<residual_pointer_t>;
 ESP_ST thread_local rtype *residuals = NULL;
@@ -72,13 +85,18 @@ using s2dtype = he_unordered_set<uint32_t>;
 ESP_ST s2dtype *sig2dbg;
 
 #ifdef MULTITHREADING
-ESP_ST shared_mutex obj_mutex;
-ESP_ST shared_mutex ptr_mutex;
+//ESP_ST shared_mutex obj_mutex;
+//ESP_ST shared_mutex ptr_mutex;
 ESP_ST shared_mutex sig_mutex;
 #endif
 
+/* STATISTICS */
+size_t n_alloc = 0;
+size_t n_dealloc = 0;
+
 ESP_ST bool he_initialized = false;
 ESP_ST int status = 0;
+
 
 /* 
  * 0 for not initialized
@@ -139,38 +157,6 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg)
 }
 #endif
 
-void print_memory_objects() {
-    SLOCK(obj_mutex);
-    PRINTF(3, "Objects List:\n");
-    for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
-        PRINTF(3, "%s Object: %016lx:%016lx\n", getTypeString(it->second.type), it->first, it->second.size);
-    }
-    SUNLOCK(obj_mutex);
-}
-
-void print_edges() {
-    PRINTF(3, "Edges List:\n");
-    SLOCK(obj_mutex);
-    SLOCK(ptr_mutex);
-    for (auto it = memory_objects->begin(); it != memory_objects->end(); it++) {
-        for (uintptr_t ptr_loc: it->second.out_edges) {
-            assert(ptr_record->find(ptr_loc) != ptr_record->end() && "ptr_record does not have this ptr");
-            PRINTF(3, "Heap Edge: %016lx->%016lx\n", it->first, ptr_record->at(ptr_loc).dst_obj);
-        }
-    }
-    SUNLOCK(ptr_mutex);
-    SUNLOCK(obj_mutex);
-}
-
-EXT_C void print_heap() {
-
-    print_memory_objects();
-    print_edges();
-
-}
-
-        
-
 void __heap_expo_shm() {
 
     char *id_str = getenv(HE_SHM_ENV_VAR);
@@ -194,21 +180,23 @@ inline bool is_invalid(uintptr_t addr) {
 
 
 bool get_object_addr(uintptr_t, uintptr_t&, struct object_info_t *&);
+
 EXT_C void global_hook(char* addr, size_t size) {
     if (!he_initialized) return;
     uintptr_t ptr = (uintptr_t)addr;
     PRINTF(3, "[HeapExpo][global]: ptr:%016lx size:%016lx\n", ptr, size);
-    LOCK(obj_mutex);
-    memory_objects->insert(make_pair<>(ptr, object_info_t(size, GLOBAL)));
-    UNLOCK(obj_mutex);
+    auto obj = (struct object_info_t*)__malloc(sizeof(struct object_info_t));
+    *obj = object_info_t(ptr, size, GLOBAL);
+    
+    memory_objects->insert_range(ptr, size, obj);
+    
 }
 
 inline void init_global_vars() {
 
     INT_MALLOC(memory_objects, motype); 
-
+    
     INT_MALLOC(ptr_record, prtype);
-    ptr_record->reserve(1024);
 
     INT_MALLOC(sig2dbg, s2dtype);
     
@@ -263,6 +251,9 @@ void __attribute__((constructor (1))) init_rt(void) {
 void __attribute__((destructor (65535))) fini_rt(void) {
 
     //print_heap();
+    if (stack_record)
+        PRINTF(0, "Stack record max: %d\n", stack_record->max);
+    PRINTF(0, "Allocation: %d, Deallocation: %d\n", n_alloc, n_dealloc);
 
     /* 
      * These frees may cause double free. 
@@ -393,8 +384,11 @@ inline uint32_t get_signature() {
 }
 
 inline void alloc_hook_(uintptr_t ptr, size_t size, uint32_t sig) {
+    n_alloc ++;
     /* Add heap object to memory_objects. Simple */
-    memory_objects->insert(make_pair<>(ptr, object_info_t(size, HEAP, sig)));
+    auto obj = (struct object_info_t*)__malloc(sizeof(object_info_t));
+    *obj = object_info_t(ptr, size, HEAP, sig);
+    memory_objects->insert_range(ptr, size, obj);
 }
 
 /* XXX: unwind stack */
@@ -407,50 +401,56 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
         uint32_t sig = 0;
         if (print_mode > 1)
             sig = get_signature();
-        LOCK(obj_mutex);
+        
         alloc_hook_(ptr, size, sig);
-        UNLOCK(obj_mutex);
+        
     }
 }
 
 inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
-
-    auto moit = memory_objects->find(ptr);
+    n_dealloc ++;
+    struct object_info_t *obj = memory_objects->find(ptr);
 
 
     /* Not very likely but ptr may be allocated by other libraries */
-    if (moit == memory_objects->end()) {
+    if (!obj) {
         return;
     }
 
-    PRINTF(3, "[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", moit->first, moit->second.size, moit->second.signature);
+    PRINTF(3, "[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", obj->addr, obj->size, obj->signature);
 
     rtype tmp; 
     /* Invalidate ptrs that point to this heap object */
-    SLOCK(moit->second.in_mutex);
-    for (uintptr_t ptr_loc: moit->second.in_edges) {
-        auto it = ptr_record->find(ptr_loc);
-        if (it == ptr_record->end()) {
+    SLOCK(obj->in_mutex);
+    for (uintptr_t ptr_loc: obj->in_edges) {
+        struct pointer_info_t *ptr_info = ptr_record->find(ptr_loc);
+        if (!ptr_info) {
             PRINTF(3, "Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
             assert(false && "cannot find ptr in ptr_record");
             continue;
         }
 
-        assert(ptr == it->second.dst_obj);
+        if (ptr != ptr_info->dst_obj || ptr_loc != ptr_info->loc) {
+            /* XXX: Some data structure incongruence here */
+            erase_it(ptr_info->src_info->out_edges, ptr_info->src_it);
+            ptr_record->insert(ptr_loc, nullptr);
+            continue;
+        }
+        assert(ptr == ptr_info->dst_obj);
         
         uintptr_t cur_val = *(uintptr_t*)ptr_loc;
 
-        if (cur_val != it->second.value) {
+        if (cur_val != ptr_info->value) {
 
-            struct object_info_t *src_obj_info = it->second.src_info;
+            struct object_info_t *src_obj_info = ptr_info->src_info;
 
             PRINTF(3, "PTR[%016lx] has unknown behavior\n", ptr_loc);
             PRINTF(3, "Record: value: %016lx src_obj:%016lx dst_obj:%016lx\n",
-                    it->second.value, it->second.src_obj, it->second.dst_obj);
+                    ptr_info->value, ptr_info->src_obj, ptr_info->dst_obj);
             PRINTF(3, "Current value: %016lx\n", cur_val);
-            if (!src_obj_info->out_edges.erase(ptr_loc)) 
-                assert(false &&"smoit incongruence");
-            ptr_record->erase(it);
+            erase_it(src_obj_info->out_edges, (ptr_info->src_it));
+            //__free(ptr_info);
+            ptr_record->insert(ptr_loc, nullptr);
 
             continue;
 
@@ -460,12 +460,12 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         if (invalidate)
             *(uintptr_t*)ptr_loc = cur_val | KADDR; 
 
-        PRINTF(3, "[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, it->second.value);
+        PRINTF(3, "[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, ptr_info->value);
         tmp.push_back(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
-                    it->second.src_info->signature, it->second.dst_info->signature,
-                    free_sig, it->second.id, counter));
+                    ptr_info->src_info->signature, ptr_info->dst_info->signature,
+                    free_sig, ptr_info->id, counter));
 
-        it->second.invalid = true;
+        ptr_info->invalid = true;
     }
 
     for (auto &p: tmp) 
@@ -478,75 +478,38 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     residuals->merge(tmp, cntcmp);
 
 
-    /* Process ptrs on stack */
-
-    uintptr_t sp;
-#ifdef __x86_64__
-    asm("\t movq %%rsp,%0" : "=r"(sp));
-#else
-    asm("\t movl %%esp,%0" : "=r"(sp));
-#endif
-
-    for (auto const& x: moit->second.stack_edges) {
-
-        uintptr_t ptr_loc = x.first;
-        uint32_t  id = x.second;
-
-        uintptr_t cur_val = *(uintptr_t*)ptr_loc;
-
-        /* The pointer is below current free in stack */
-        if (ptr_loc < sp) {
-            continue;
-        }
-        if (!stack_record || stack_record->find(ptr_loc) == stack_record->end())  {
-            continue;
-        }
-        if (cur_val >= moit->first && cur_val < moit->first + moit->second.size) {
-            if (invalidate_mode > 1)
-                *(uintptr_t*)ptr_loc = cur_val | KADDR; 
-            
-            PRINTF(3, "[HeapExpo][stack_invalidate]: ptr_loc:%016lx value:%016lx store_id:%08x\n", ptr_loc, cur_val, id);
-        
-            if (!inval_record) {
-                INT_MALLOC(inval_record, irtype);
-            }
-            //inval_record->insert(make_pair<>(ptr_loc, id));
-            (*inval_record)[ptr_loc] = id;
-
-        }
-    }
-
-
-    SUNLOCK(moit->second.in_mutex);
-    LOCK(moit->second.in_mutex);
-    moit->second.in_edges.clear();
-    UNLOCK(moit->second.in_mutex);
+    SUNLOCK(obj->in_mutex);
+    LOCK(obj->in_mutex);
+    obj->in_edges.clear();
+    UNLOCK(obj->in_mutex);
 
     /* Erase ptrs in this heap object */
-    for (uintptr_t ptr_loc: moit->second.out_edges) {
-        auto it = ptr_record->find(ptr_loc);
-        PRINTF(3, "[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, moit->first);
-        assert(it != ptr_record->end());
-        if (!it->second.invalid) {
-            struct object_info_t *dst_obj_info = it->second.dst_info;
+    for (uintptr_t ptr_loc: obj->out_edges) {
+        struct pointer_info_t *ptr_info = ptr_record->find(ptr_loc);
+        if (ptr_info->loc != ptr_loc)
+            continue;
+        PRINTF(3, "[HeapExpo][remove]: ptr_loc:%016lx obj:%016lx\n", ptr_loc, obj->addr);
+        if (!ptr_info->invalid) {
+            struct object_info_t *dst_obj_info = ptr_info->dst_info;
             LOCK(dst_obj_info->in_mutex);
-            if (!dst_obj_info->in_edges.erase(ptr_loc)) {
-                assert(false && "Cannot remove ptr_loc");
-            }
+            erase_it(dst_obj_info->in_edges, (ptr_info->dst_it));
             UNLOCK(dst_obj_info->in_mutex);
         }
         else {
             PRINTF(3, "[HeapExpo][remove_invalid]: ptr_loc:%016lx\n", ptr_loc);
             remove_from_residuals(ptr_loc);
         }
-            
-        ptr_record->erase(it);
+        //__free(ptr_info);
+        ptr_record->insert(ptr_loc, nullptr);
     }
 
 
-    moit->second.out_edges.clear();
+    obj->out_edges.clear();
+    obj->released = true;
 
-    memory_objects->erase(moit);
+    memory_objects->insert_range(obj->addr, obj->size, nullptr);
+    //__free(obj);
+    
    
 }
 
@@ -562,11 +525,11 @@ EXT_C void dealloc_hook(char* ptr_) {
 
         check_double_free((void*)ptr);
 
-        LOCK(obj_mutex);
-        LOCK(ptr_mutex);
+        
+        
         dealloc_hook_(ptr, sig, invalidate_mode>1 );
-        UNLOCK(ptr_mutex);
-        UNLOCK(obj_mutex);
+        
+        
     }
 }
 
@@ -586,29 +549,43 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
     if (print_mode > 1)
         get_signature();
     PRINTF(3, "[HeapExpo][realloc]: oldptr:%016lx newptr:%016lx size:%016lx\n", oldptr, newptr, newsize);
-    LOCK(obj_mutex);
-    if (offset == 0) {
-        memory_objects->at(newptr).size = newsize;
-        UNLOCK(obj_mutex);
+    
+
+    struct object_info_t *old_info = memory_objects->find(oldptr);
+    if (offset == 0 && old_info && old_info && old_info->addr == oldptr) {
+        assert(old_info->addr == newptr);
+        size_t oldsize = old_info->size;
+        /* Modify shadow memory as well */
+        if (newsize > oldsize) {
+            /* Expand: insert metadata */
+            memory_objects->insert_range(oldptr+oldsize, newsize -oldsize, old_info);
+        }
+        else {
+            /* Shrink: remove metadata */
+            memory_objects->insert_range(oldptr+newsize, oldsize-newsize, nullptr);
+        }
+        old_info->size = newsize;
         return;
     }
-    LOCK(ptr_mutex);
     
-    if (newptr)
+    
+    if (newptr && newsize)
         alloc_hook_(newptr, newsize, sig);
+    struct object_info_t *new_info = memory_objects->find(newptr);
 
     //size_t oldsize = memory_objects[oldptr].size;
 
-    if (newptr && oldptr) {
+    if (newptr && oldptr && old_info) {
         /* Iterate every objects old object points to */
-        for (uintptr_t ptr_loc: memory_objects->at(oldptr).out_edges) {
-
-
+        for (uintptr_t ptr_loc: old_info->out_edges) {
 
             /* Update inedges */
 
-            auto it = ptr_record->find(ptr_loc);
-            assert (it != ptr_record->end()) ;
+            struct pointer_info_t *ptr_info = ptr_record->find(ptr_loc);
+            if (ptr_info->loc != ptr_loc)
+                continue;
+
+            assert(ptr_info);
             
             /* 
              * Shrinked. Ignore ptrs outside range 
@@ -616,70 +593,76 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
              */
             if (ptr_loc >= oldptr + newsize) {
                 PRINTF(3, "PTR[%016lx] is discarded while realloc to a smaller area\n", ptr_loc);
-                if (!it->second.invalid) {
-                    LOCK(it->second.dst_info->in_mutex);
-                    it->second.dst_info->in_edges.erase(ptr_loc);
-                    UNLOCK(it->second.dst_info->in_mutex);
+                if (!ptr_info->invalid) {
+                    LOCK(ptr_info->dst_info->in_mutex);
+                    erase_it(ptr_info->dst_info->in_edges, (ptr_info->dst_it));
+                    UNLOCK(ptr_info->dst_info->in_mutex);
                 }
                 else {
                     remove_from_residuals(ptr_loc);
                 }
-                ptr_record->erase(it);
+                //__free(ptr_info);
+                ptr_record->insert(ptr_loc, nullptr);
                 continue;
             }
 
             uintptr_t cur_val = *(uintptr_t*)(ptr_loc+offset);
 
             /* If value changed, we don't move this ptr */
-            if (!it->second.invalid && cur_val != it->second.value) {
+            if (!ptr_info->invalid && cur_val != ptr_info->value) {
                 PRINTF(3, "PTR[%016lx] value has changed\n", ptr_loc);
-                LOCK(it->second.dst_info->in_mutex);
-                it->second.dst_info->in_edges.erase(ptr_loc);
-                UNLOCK(it->second.dst_info->in_mutex);
-                ptr_record->erase(it);
+                LOCK(ptr_info->dst_info->in_mutex);
+                erase_it(ptr_info->dst_info->in_edges, (ptr_info->dst_it));
+                UNLOCK(ptr_info->dst_info->in_mutex);
+                //__free(ptr_info);
+                ptr_record->insert(ptr_loc, nullptr);
                 continue;
             }
 
 
             PRINTF(3, "MOVING %s PTR[%016lx] to %016lx, OFFSET:%016lx\n", 
-                    it->second.invalid? "INVALID": "",
+                    ptr_info->invalid? "INVALID": "",
                     ptr_loc, ptr_loc+offset, offset);
 
-            if (!it->second.invalid) {
-
-                assert (it->second.dst_info);
-                assert (memory_objects->find(it->second.dst_obj) != memory_objects->end());
-                assert (it->second.dst_info == &memory_objects->at(it->second.dst_obj));
-                LOCK(it->second.dst_info->in_mutex);
-                if (! it->second.dst_info->in_edges.erase(ptr_loc))
-                    assert(false && "in edge problem");
-
-                it->second.dst_info->in_edges.insert(ptr_loc+offset);
-                UNLOCK(it->second.dst_info->in_mutex);
-
-            } else {
+            if (ptr_info->invalid) {
                 update_residual_loc(ptr_loc, ptr_loc+offset);
+                continue;
             }
+
+            assert (ptr_info->dst_info);
+            LOCK(ptr_info->dst_info->in_mutex);
+            erase_it(ptr_info->dst_info->in_edges, (ptr_info->dst_it));
+
+            auto dst_it = push_back_it(ptr_info->dst_info->in_edges, (ptr_loc+offset));
+            //PRINTF(0, "dst_it %016lx, val %016lx\n", dst_it, ptr_loc+offset);
+            UNLOCK(ptr_info->dst_info->in_mutex);
 
 
             /* Update outedges */
-            memory_objects->at(newptr).out_edges.insert(ptr_loc+offset);
+            auto src_it = push_back_it(new_info->out_edges, (ptr_loc+offset));
+            //PRINTF(0, "src_it %016lx, val %016lx\n", src_it, ptr_loc+offset);
 
             /* Update ptr_record */
-            ptr_record->insert(make_pair<>(ptr_loc+offset, it->second));
-            ptr_record->at(ptr_loc+offset).src_obj += offset;
-            ptr_record->at(ptr_loc+offset).src_info = &memory_objects->at(newptr);
-            ptr_record->erase(it);
+            struct pointer_info_t *new_ptr_info = (struct pointer_info_t*)__malloc(sizeof(struct pointer_info_t));
+            *new_ptr_info = *ptr_info;
+            new_ptr_info->loc = ptr_loc + offset;
+            new_ptr_info->src_obj += offset;
+            new_ptr_info->src_info = new_info;
+            new_ptr_info->src_it = src_it;
+            new_ptr_info->dst_it = dst_it;
+            //__free(ptr_info);
+            ptr_record->insert(ptr_loc, nullptr);
+            ptr_record->insert(ptr_loc+offset, new_ptr_info);
 
         }
-        memory_objects->at(oldptr).out_edges.clear();
+        old_info->out_edges.clear();
 
     }
     if (oldptr)
         dealloc_hook_(oldptr, sig, invalidate_mode > 2);
 
-    UNLOCK(ptr_mutex);
-    UNLOCK(obj_mutex);
+    
+    
 }
 
 /*
@@ -687,67 +670,54 @@ EXT_C void realloc_hook(char* oldptr_, char* newptr_, size_t newsize) {
  * this ptr_val points to as long as it's with the range
  */
 bool get_object_addr(uintptr_t addr, uintptr_t &object_addr, struct object_info_t* &object_info) {
-    auto it = memory_objects->upper_bound(addr);
-    if (it == memory_objects->begin()) {
-        return 0;
-    }
-    it--;
-    int diff = addr - it->first;
-    if (diff >= 0 && diff < it->second.size) {
-        object_addr = it->first;
-        object_info = &it->second;
+
+    auto obj = memory_objects->find(addr);
+
+    if (obj) {
+        object_addr = obj->addr;
+        object_info = obj;
         return 1;
     }
+
     return 0;
 }
 
-inline void deregptr_dst(he_unordered_map<uintptr_t, struct pointer_info_t>::iterator it) {
+inline void deregptr_dst(struct pointer_info_t *ptr_info) {
 
     /* Remove ptr from dst_obj's in_edges if ptr isn't invalidated */
-    if (!it->second.invalid) {
-        assert(it->second.dst_info && "dst_obj in_edges not cleared");
-        LOCK(it->second.dst_info->in_mutex);
-        if (! it->second.dst_info->in_edges.erase(it->first)) {
-            PRINTF(3, "dst_obj: loc:%016lx\n", it->second.dst_obj);
-            assert (false && "deregptr in edge problem");
-        }
-        UNLOCK(it->second.dst_info->in_mutex);
+    if (!ptr_info->invalid) {
+        assert(ptr_info->dst_info && "dst_obj in_edges not cleared");
+        LOCK(ptr_info->dst_info->in_mutex);
+        erase_it(ptr_info->dst_info->in_edges, (ptr_info->dst_it));
+        UNLOCK(ptr_info->dst_info->in_mutex);
     } 
 }
 
-inline void deregptr_src(he_unordered_map<uintptr_t, struct pointer_info_t>::iterator it) {
+inline void deregptr_src(struct pointer_info_t *ptr_info) {
 
     /* Remove ptr from src_obj's out_edges */
-    assert( it->second.src_info && "src_obj out_edges not cleared");
-    if (! it->second.src_info->out_edges.erase(it->first)) {
-        PRINTF(3, "src_obj: loc:%016lx\n", it->second.src_obj);
-        assert (false && "deregptr out edge problem");
-    }
+    assert( ptr_info->src_info && "src_obj out_edges not cleared");
+    erase_it(ptr_info->src_info->out_edges, (ptr_info->src_it));
 }
 
-inline bool deregptr_(uintptr_t ptr_loc, bool keep) {
+bool deregptr_(uintptr_t ptr_loc) {
 
-    SLOCK(ptr_mutex);
-    auto it = ptr_record->find(ptr_loc);
-    if (it != ptr_record->end()) {
+    
+    pointer_info_t *ptr_info = ptr_record->find(ptr_loc);
+    if (ptr_info && ptr_info->loc == ptr_loc) {
 
-        deregptr_dst(it);
-        deregptr_src(it);
+        deregptr_dst(ptr_info);
+        deregptr_src(ptr_info);
 
-        if (it->second.invalid) {
+        if (ptr_info->invalid) {
             remove_from_residuals(ptr_loc);
         }
 
-        SUNLOCK(ptr_mutex);
-        if (!keep) {
-            LOCK(ptr_mutex);
-            ptr_record->erase(ptr_loc);
-            UNLOCK(ptr_mutex);
-            return 0;
-        }
-        return 1;
+        ptr_record->insert(ptr_loc, nullptr);
+        
+        return 0;
     }
-    SUNLOCK(ptr_mutex);
+    
     return 0;
 
 }
@@ -765,16 +735,11 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
         return;
     }
 
-    SLOCK(obj_mutex);
-    bool kept = deregptr_(ptr_loc, true);
+    
+    deregptr_(ptr_loc);
 
     if (ptr_val < 4096) {
-        if (kept) {
-            LOCK(ptr_mutex);
-            ptr_record->erase(ptr_loc);
-            UNLOCK(ptr_mutex);
-        }
-        SUNLOCK(obj_mutex);
+        
         return;
     }
 
@@ -787,29 +752,18 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
     /* Create an edge if src and dst are both in memory_objects*/
     if (obj_addr && ptr_obj_addr && obj_addr != ptr_obj_addr) {
         LOCK(obj_info->in_mutex);
-        obj_info->in_edges.insert(ptr_loc);
+        auto dst_it = push_back_it(obj_info->in_edges, (ptr_loc));
+        //PRINTF(0, "dst_it %016lx, val %016lx\n", dst_it, ptr_loc);
         UNLOCK(obj_info->in_mutex);
-        ptr_obj_info->out_edges.insert(ptr_loc);
-        pointer_info_t pit = pointer_info_t(ptr_val, ptr_obj_addr, obj_addr,
-                                            ptr_obj_info, obj_info, id);
-        if (!kept) {
-            LOCK(ptr_mutex);
-            ptr_record->insert(make_pair<>(ptr_loc, pit));
-            UNLOCK(ptr_mutex);
-        }
-        else {
-            SLOCK(ptr_mutex);
-            ptr_record->at(ptr_loc) = pit;
-            SUNLOCK(ptr_mutex);
-        }
-
-    }
-    else {
-        if (kept) {
-            LOCK(ptr_mutex);
-            ptr_record->erase(ptr_loc);
-            UNLOCK(ptr_mutex);
-        }
+        auto src_it = push_back_it(ptr_obj_info->out_edges, (ptr_loc));
+        //PRINTF(0, "src_it %016lx, val %016lx\n", src_it, ptr_loc);
+        pointer_info_t pit = pointer_info_t(ptr_loc, ptr_val, ptr_obj_addr, obj_addr,
+                                ptr_obj_info, obj_info, src_it, dst_it, id);
+        struct pointer_info_t *new_ptr_info = (struct pointer_info_t*)__malloc(sizeof(pointer_info_t));
+        *new_ptr_info = pit;
+        
+        ptr_record->insert(ptr_loc, new_ptr_info);
+        
     }
 
     /* 
@@ -817,16 +771,13 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
      * Ptr may locate on the stack
      */
     if (obj_addr && !ptr_obj_addr ) {
-        LOCK(obj_info->stack_mutex);
-        obj_info->stack_edges[ptr_loc] = id;
-        UNLOCK(obj_info->stack_mutex);
         if (!stack_record) {
             INT_MALLOC(stack_record, sptype);
         }
-        stack_record->insert(ptr_loc);
+        stack_record->insert(stack_pointer_t(ptr_loc, ptr_val, obj_info, id));
     }
 
-    SUNLOCK(obj_mutex);
+    
 }
 
 EXT_C void stack_regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
@@ -845,14 +796,11 @@ EXT_C void stack_regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
     get_object_addr(ptr_val, obj_addr, obj_info);
     PRINTF(3, "[HeapExpo][stack_regptr]: loc:%016lx val:%016lx id:%08x obj:%016lx\n", ptr_loc, ptr_val, id, obj_addr);
 
-    if (obj_addr) {
-        LOCK(obj_info->stack_mutex);
-        obj_info->stack_edges[ptr_loc] = id;
-        UNLOCK(obj_info->stack_mutex);
+    if (obj_addr && obj_info && obj_info->addr == obj_addr) {
         if (!stack_record) {
             INT_MALLOC(stack_record, sptype);
         }
-        stack_record->insert(ptr_loc);
+        stack_record->insert(stack_pointer_t(ptr_loc, ptr_val, obj_info, id));
     }
 
 }
@@ -863,9 +811,9 @@ EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
 
     PRINTF(3, "[HeapExpo][deregptr]: loc:%016lx id:%08x\n", ptr_loc, id);
     check_residuals();
-    SLOCK(obj_mutex);
-    deregptr_(ptr_loc, false);
-    SUNLOCK(obj_mutex);
+    
+    deregptr_(ptr_loc);
+    
 
 }
 
@@ -880,13 +828,7 @@ EXT_C void voidcallstack() {
 #endif
 
     if (stack_record)  {
-        auto it = stack_record->lower_bound(sp + 0x10);
-        stack_record->erase(stack_record->begin(), it);
-    }
-
-    if (inval_record) {
-        auto it2 = inval_record->lower_bound(sp + 0x10);
-        inval_record->erase(inval_record->begin(), it2);
+        stack_record->erase_lower(stack_pointer_t(sp + 0x10));
     }
 
 }
@@ -896,17 +838,20 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
     uintptr_t cur_val = *(uintptr_t*)ptr_loc;
 
-    if (is_invalid(cur_val)) {
+    stack_pointer_t *ptr = stack_record->find(stack_pointer_t(ptr_loc));
 
-        if (!inval_record) return;
-
-        auto it = inval_record->find(ptr_loc);
-        if (it == inval_record->end()) return;
-        
-        uint32_t store_id = it->second;
-
+    if (id == 0x7155daf7) {
+        PRINTF(0, "DEBUG %p\n", ptr);
+        stack_record->check();
+    }
+    if (ptr && ptr->dst_info->addr <= cur_val && cur_val < ptr->dst_info->addr + ptr->dst_info->size
+            && ptr->dst_info->released) {
+        uint32_t store_id = ptr->store_id;
         PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx] val[%016lx]\n", 
                 ptr_loc, id, store_id, cur_val);
+        if (invalidate_mode > 1)
+            *(uintptr_t*)ptr_loc = cur_val | KADDR; 
+
 
     }
     
