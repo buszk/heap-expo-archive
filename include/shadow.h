@@ -8,17 +8,19 @@
 #define PTR_BYTES 6
 #define PTR_BITS 48
 #define LAST_NUM_CHILD 32
+#define PTR_SIZE 8
 #else 
 #define PTR_BYTES 4
 #define PTR_BITS 32
 #define LAST_NUM_CHILD 64
+#define PTR_SIZE 4
 #endif
 
 #define NUM_CHILD_LEVEL(x)              ((x==PTR_BYTES-1) ? LAST_NUM_CHILD : NUM_CHILD)
 
-#define PTR_LAST_INDEX(ptr)             ((ptr & 0xff) >> 3)
+#define PTR_LAST_INDEX(ptr)             ((ptr & 0xff) / PTR_SIZE)
 #define GET_PTR_BYTE(b, ptr, n)         b = (ptr >> (PTR_BYTES - n - 1)*8) & 0xff
-#define GET_PTR_LAST_INDEX(b, ptr)      b = ((ptr & 0xff) >> 3)
+#define GET_PTR_LAST_INDEX(b, ptr)      b = ((ptr & 0xff) / PTR_SIZE)
 #ifdef DEBUG
 #define LIST_OVERFLOW_CHECK(l, i)       if (l!=root && malloc_usable_size(l)/sizeof(node) <= i) assert(false)
 #else

@@ -1003,13 +1003,14 @@ static RegisterPass<HeapExpoCallGraphAnalysis> W("HeapExpoCallGraph", "HeapExpo 
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoGlobalTracker());
-    //PM.add(new HeapExpoHeapTracker());
+    PM.add(new HeapExpoHeapTracker());
+    //PM.add(new HeapExpoStackTracker());
 }
 
 static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
-    PM.add(new HeapExpoStackTracker());
-    PM.add(new HeapExpoHeapTracker());
+    //PM.add(new HeapExpoStackTracker());
+    //PM.add(new HeapExpoHeapTracker());
     
     //PM.add(new HeapExpoCallGraphAnalysis());
 }

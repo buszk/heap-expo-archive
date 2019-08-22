@@ -251,10 +251,11 @@ void __attribute__((constructor (1))) init_rt(void) {
 void __attribute__((destructor (65535))) fini_rt(void) {
 
     //print_heap();
+    /*
     if (stack_record)
         PRINTF(0, "Stack record max: %d\n", stack_record->max);
     PRINTF(0, "Allocation: %d, Deallocation: %d\n", n_alloc, n_dealloc);
-
+    */
     /* 
      * These frees may cause double free. 
      * Sometimes they are freed before dtor
@@ -507,10 +508,12 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     obj->out_edges.clear();
     obj->released = true;
 
-    for (auto &p: stack_record->list) {
-        if (p.dst_info == obj && p.val == *(uintptr_t*)p.loc) {
-            if (invalidate_mode > 1)
-                *(uintptr_t*)p.loc |= KADDR; 
+    if (stack_record) {
+        for (auto &p: stack_record->list) {
+            if (p.dst_info == obj && p.val == *(uintptr_t*)p.loc) {
+                if (invalidate_mode > 1)
+                    *(uintptr_t*)p.loc |= KADDR; 
+            }
         }
     }
 
@@ -856,12 +859,15 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
             */
     if (is_invalid(cur_val)) {
         stack_pointer_t *ptr = stack_record->find(stack_pointer_t(ptr_loc));
-        uint32_t store_id = ptr->store_id;
-        PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx] val[%016lx]\n", 
-                ptr_loc, id, store_id, cur_val);
-        if (invalidate_mode > 1)
-            *(uintptr_t*)ptr_loc = cur_val | KADDR; 
+        if (ptr && ptr->dst_info->addr <= cur_val && cur_val < ptr->dst_info->addr + ptr->dst_info->size
+                && ptr->dst_info->released) {
+            uint32_t store_id = ptr->store_id;
+            PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx] val[%016lx]\n", 
+                    ptr_loc, id, store_id, cur_val);
+            if (invalidate_mode > 1)
+                *(uintptr_t*)ptr_loc = cur_val | KADDR; 
 
+        }
 
     }
     
