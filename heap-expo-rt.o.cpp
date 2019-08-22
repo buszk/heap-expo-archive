@@ -66,7 +66,6 @@ ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
 #define erase_it(list, it)  (list).erase(it);
 #endif
 
-
 using motype = shadow<struct object_info_t>;
 ESP_ST motype *memory_objects;
 
@@ -74,10 +73,8 @@ using prtype = shadow<struct pointer_info_t>;
 //using prtype = he_unordered_map<uintptr_t, struct pointer_info_t>;
 ESP_ST prtype *ptr_record; // Log all all ptrs and the object addr 
 
-using sptype = he_set<uintptr_t>;
+using sptype = he_sorted_list<stack_pointer_t, comp<stack_pointer_t>>;
 ESP_ST thread_local sptype *stack_record = NULL;
-using irtype = he_map<uintptr_t, uint32_t>;
-ESP_ST thread_local irtype *inval_record = NULL;
 
 using rtype = he_list<residual_pointer_t>;
 ESP_ST thread_local rtype *residuals = NULL;
@@ -92,6 +89,10 @@ ESP_ST s2dtype *sig2dbg;
 //ESP_ST shared_mutex ptr_mutex;
 ESP_ST shared_mutex sig_mutex;
 #endif
+
+/* STATISTICS */
+size_t n_alloc = 0;
+size_t n_dealloc = 0;
 
 ESP_ST bool he_initialized = false;
 ESP_ST int status = 0;
@@ -250,6 +251,9 @@ void __attribute__((constructor (1))) init_rt(void) {
 void __attribute__((destructor (65535))) fini_rt(void) {
 
     //print_heap();
+    if (stack_record)
+        PRINTF(0, "Stack record max: %d\n", stack_record->max);
+    PRINTF(0, "Allocation: %d, Deallocation: %d\n", n_alloc, n_dealloc);
 
     /* 
      * These frees may cause double free. 
@@ -380,6 +384,7 @@ inline uint32_t get_signature() {
 }
 
 inline void alloc_hook_(uintptr_t ptr, size_t size, uint32_t sig) {
+    n_alloc ++;
     /* Add heap object to memory_objects. Simple */
     auto obj = (struct object_info_t*)__malloc(sizeof(object_info_t));
     *obj = object_info_t(ptr, size, HEAP, sig);
@@ -403,7 +408,7 @@ EXT_C void alloc_hook(char* ptr_, size_t size) {
 }
 
 inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
-
+    n_dealloc ++;
     struct object_info_t *obj = memory_objects->find(ptr);
 
 
@@ -473,51 +478,6 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     residuals->merge(tmp, cntcmp);
 
 
-    /* Process ptrs on stack */
-
-    uintptr_t sp;
-#ifdef __x86_64__
-    asm("\t movq %%rsp,%0" : "=r"(sp));
-#else
-    asm("\t movl %%esp,%0" : "=r"(sp));
-#endif
-
-    PRINTF(3, "[HeapExpo] %d stack pointers registered\n", obj->stack_edges.size());
-
-    LOCK(obj->stack_mutex);
-    for (auto it = obj->stack_edges.rbegin(); 
-         it != obj->stack_edges.rend(); it++) {
-
-        uintptr_t ptr_loc = it->first;
-        uint32_t  id = it->second;
-
-        /* The pointer is below current free in stack */
-        if (ptr_loc < sp) {
-            break;
-        }
-        if (!stack_record || stack_record->find(ptr_loc) == stack_record->end())  {
-            continue;
-        }
-        
-        uintptr_t cur_val = *(uintptr_t*)ptr_loc;
-
-        if (cur_val >= obj->addr && cur_val < obj->addr + obj->size) {
-            if (invalidate_mode > 1)
-                *(uintptr_t*)ptr_loc = cur_val | KADDR; 
-            
-            PRINTF(3, "[HeapExpo][stack_invalidate]: ptr_loc:%016lx value:%016lx store_id:%08x\n", ptr_loc, cur_val, id);
-        
-            if (!inval_record) {
-                INT_MALLOC(inval_record, irtype);
-            }
-            //inval_record->insert(make_pair<>(ptr_loc, id));
-            (*inval_record)[ptr_loc] = id;
-
-        }
-    }
-    UNLOCK(obj->stack_mutex);
-
-
     SUNLOCK(obj->in_mutex);
     LOCK(obj->in_mutex);
     obj->in_edges.clear();
@@ -545,6 +505,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
 
     obj->out_edges.clear();
+    obj->released = true;
 
     memory_objects->insert_range(obj->addr, obj->size, nullptr);
     //__free(obj);
@@ -810,13 +771,10 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
      * Ptr may locate on the stack
      */
     if (obj_addr && !ptr_obj_addr ) {
-        LOCK(obj_info->stack_mutex);
-        obj_info->stack_edges.operator[](ptr_loc) = id;
-        UNLOCK(obj_info->stack_mutex);
         if (!stack_record) {
             INT_MALLOC(stack_record, sptype);
         }
-        stack_record->insert(ptr_loc);
+        stack_record->insert(stack_pointer_t(ptr_loc, ptr_val, obj_info, id));
     }
 
     
@@ -839,13 +797,10 @@ EXT_C void stack_regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
     PRINTF(3, "[HeapExpo][stack_regptr]: loc:%016lx val:%016lx id:%08x obj:%016lx\n", ptr_loc, ptr_val, id, obj_addr);
 
     if (obj_addr && obj_info && obj_info->addr == obj_addr) {
-        LOCK(obj_info->stack_mutex);
-        obj_info->stack_edges.operator[](ptr_loc) = id;
-        UNLOCK(obj_info->stack_mutex);
         if (!stack_record) {
             INT_MALLOC(stack_record, sptype);
         }
-        stack_record->insert(ptr_loc);
+        stack_record->insert(stack_pointer_t(ptr_loc, ptr_val, obj_info, id));
     }
 
 }
@@ -873,13 +828,7 @@ EXT_C void voidcallstack() {
 #endif
 
     if (stack_record)  {
-        auto it = stack_record->lower_bound(sp + 0x10);
-        stack_record->erase(stack_record->begin(), it);
-    }
-
-    if (inval_record) {
-        auto it2 = inval_record->lower_bound(sp + 0x10);
-        inval_record->erase(inval_record->begin(), it2);
+        stack_record->erase_lower(stack_pointer_t(sp + 0x10));
     }
 
 }
@@ -889,17 +838,20 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
     uintptr_t ptr_loc = (uintptr_t)ptr_loc_;
     uintptr_t cur_val = *(uintptr_t*)ptr_loc;
 
-    if (is_invalid(cur_val)) {
+    stack_pointer_t *ptr = stack_record->find(stack_pointer_t(ptr_loc));
 
-        if (!inval_record) return;
-
-        auto it = inval_record->find(ptr_loc);
-        if (it == inval_record->end()) return;
-        
-        uint32_t store_id = it->second;
-
+    if (id == 0x7155daf7) {
+        PRINTF(0, "DEBUG %p\n", ptr);
+        stack_record->check();
+    }
+    if (ptr && ptr->dst_info->addr <= cur_val && cur_val < ptr->dst_info->addr + ptr->dst_info->size
+            && ptr->dst_info->released) {
+        uint32_t store_id = ptr->store_id;
         PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx] val[%016lx]\n", 
                 ptr_loc, id, store_id, cur_val);
+        if (invalidate_mode > 1)
+            *(uintptr_t*)ptr_loc = cur_val | KADDR; 
+
 
     }
     

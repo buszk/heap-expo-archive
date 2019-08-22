@@ -22,7 +22,7 @@ INST_LFL    = $(LDFLAGS) heap-expo-rt.o -lstdc++ # force c++ linker
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS) -Iinclude
 CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
 
-PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o afl-heap-expo-map shadow-test
+PROGS       = heap-expo-clang LLVMHeapExpo.so heap-expo-rt.o heap-expo-rt-32.o heap-expo-rt-64.o afl-heap-expo-map shadow-test list-test
 
 PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so $(LTOFLAG)
 
@@ -55,6 +55,9 @@ heap-expo-rt-64.o: heap-expo-rt.o.cpp shadow.h
 	@$(CXX) $(CXXFLAGS) $(RTFLAGS) $(MTFLAG) -m64 -fPIC -c $< -o $(@:.o=-mt.o) 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
 shadow-test: shadow-test.cpp shadow.h
+	$(CXX) -g -O0 $(RTFLAGS) $< -o $@
+
+list-test: list-test.cpp include/rt-stl.h
 	$(CXX) -g -O0 $(RTFLAGS) $< -o $@
 
 test_shadow:
