@@ -213,163 +213,6 @@ struct HeapExpoGlobalTracker : public ModulePass {
 
 };
 
-static bool isPotentiallyDefed(Instruction *To, std::set<Instruction*> &Defs) {
-    for (Instruction *I : Defs) 
-        if (isPotentiallyReachable(I, To))
-            return true;
-    return false;
-}
-
-static bool isPotentiallyUsed(Instruction *From, std::set<Instruction*> &Uses, std::set<Instruction*> &Defs) {
-
-    /* Fast Path */
-    if (Uses.size() == 0) {
-        return false;
-    }
-
-    bool def_in_block = false;
-    bool found_src = false;
-    BasicBlock *p = (BasicBlock*)From->getParent();
-    
-    auto in_set = [](Instruction *I, std::set<Instruction*> Set) {
-        return Set.find(I) != Set.end();
-    };
-
-    std::set<BasicBlock*> ToBlocks;
-    std::set<BasicBlock*> AvoidBlocks;
-    std::set<BasicBlock*> IntersectBlock;
-    std::set<BasicBlock*> UseBlock;
-    std::set<BasicBlock*> DefBlock;
-   /* 
-    LOG(LVL_DEBUG) << "==========================\n";
-    LOG(LVL_DEBUG) << "Defs\n";
-    for (Instruction* i : Defs) {
-        LOG(LVL_DEBUG) << *i << "\n";
-    }
-    LOG(LVL_DEBUG) << "Uses\n";
-    for (Instruction* i : Uses) {
-        LOG(LVL_DEBUG) << *i << "\n";
-    }
-    */
-
-    bool to_parent = false;
-
-    for (auto i = p->begin(); i != p->end(); i++) {
-        Instruction* I = (Instruction*) &*i;
-        if (I == From) {
-            //LOG(LVL_DEBUG) << "Found call\n";
-            found_src = true;
-        }
-        else if (found_src && in_set(I, Defs)) {
-            //LOG(LVL_DEBUG) << "Def after call\n";
-            return false;
-        }
-        else if (found_src && in_set(I, Uses))  {
-            //LOG(LVL_DEBUG) << "Use after call\n";
-            return true;
-        }
-        else if (!found_src && in_set(I, Defs)) {
-            //LOG(LVL_DEBUG) << "Found def in block before call\n";
-            def_in_block = true;
-        }
-        else if (!found_src && in_set(I, Uses) && def_in_block) {
-            //LOG(LVL_DEBUG) << "Found use in block before call but guarded by def\n";
-            //remove_set(I, Uses);
-        }
-        else if (!found_src && in_set(I, Uses) && !def_in_block)  {
-            //LOG(LVL_DEBUG) << "Found use in block before call and any def\n";
-            to_parent = true;
-        }
-    }
-
-    for (Instruction *I : Uses) {
-        if (I->getParent() != p)
-            UseBlock.insert((BasicBlock*)I->getParent());
-    }
-    for (Instruction *I : Defs) {
-        if (I->getParent() != p)
-            DefBlock.insert((BasicBlock*)I->getParent());
-    }
-
-
-    auto diff_set = [] (std::set<BasicBlock*> &s1, std::set<BasicBlock*> &s2, 
-            std::set<BasicBlock*> &output) {
-
-        for (BasicBlock *b : s1) 
-            if (s2.find(b) == s2.end()) 
-                output.insert(b);
-
-    };
-
-    diff_set(UseBlock, DefBlock, ToBlocks);
-    diff_set(DefBlock, UseBlock, AvoidBlocks);
-
-    auto inter_set = [] (std::set<BasicBlock*> &s1, std::set<BasicBlock*> &s2, 
-            std::set<BasicBlock*> &output) {
-
-        for (BasicBlock *b: s1)
-            if (s2.find(b) != s2.end())
-                output.insert(b);
-
-    };
-    inter_set (UseBlock, DefBlock, IntersectBlock);
-
-    for (const BasicBlock *BB : IntersectBlock) {
-        for (const Instruction &Ins : *BB) {
-            Instruction* I = (Instruction*)&Ins;
-            if (in_set(I, Uses)) {
-                ToBlocks.insert((BasicBlock*)BB);
-                break;
-            }
-            else if (in_set(I, Defs)) {
-                AvoidBlocks.insert((BasicBlock*)BB);
-                break;
-            }
-        }
-    }
-    /* Fast Path */
-    if (ToBlocks.size() == 0 && !to_parent)
-        return false;
-
-    std::vector<BasicBlock*> Reached;
-    std::set<BasicBlock*> WorkList;
-    WorkList.insert((BasicBlock*)p);
-    /*
-    LOG(LVL_DEBUG) << "Avoid\n";
-    for (BasicBlock* b: AvoidBlocks) {
-        LOG(LVL_DEBUG) << *b << "\n";
-    }
-    LOG(LVL_DEBUG) << "To\n";
-    for (BasicBlock* b: ToBlocks) {
-        LOG(LVL_DEBUG) << *b << "\n";
-    }
-    */
-    while(!WorkList.empty()) {
-
-        BasicBlock *cur = *WorkList.begin();
-        WorkList.erase(cur);
-        Reached.push_back(cur);
-
-        for (auto it = succ_begin(cur); it != succ_end(cur); it++) {
-
-            BasicBlock *next = *it;
-            if (AvoidBlocks.find(next) == AvoidBlocks.end() &&
-                find(Reached.begin(), Reached.end(), next) == Reached.end())
-                WorkList.insert(next);
- 
-            if (to_parent && next== (BasicBlock*)p) {
-                return true;
-            }
-
-            if (ToBlocks.find(next) != ToBlocks.end()) {
-                return true;
-            }
-        }
-    }
-    return false;
-
-}
-
 static AllocaInst* getStackPtr(Value *V) {
 
     User *U = dyn_cast<User>(V);
@@ -730,19 +573,178 @@ struct HeapExpoCallGraphAnalysis: public FunctionPass, public CallGraphAnalysis 
 
 };
 
+/*
+ * The class that has functionality of Liveness Analysis
+ */
+struct LivenessAnalysis{
+
+    /* Set of live variables at the start of instruction */
+    std::unordered_map<Instruction*, std::set<AllocaInst*>> in;
+    /* Set of live variables at the end of instruction */
+    std::unordered_map<Instruction*, std::set<AllocaInst*>> out;
+
+    LivenessAnalysis() {};
+
+    bool getFunctionLiveness(Function &F) {
+
+        in.clear();
+        out.clear();
+
+        /* Definitions: store instructions that write to stack addresses */
+        std::unordered_map<Instruction*, AllocaInst*> defs;
+        /* Uses: load instructions that read from stack addresses */
+        std::unordered_map<Instruction*, AllocaInst*> uses;
+        /* References: call instructions that have stack addresses as reference */
+        std::unordered_map<Instruction*, std::set<AllocaInst*>> refs;
+        bool changed = true;
+
+
+
+        /* Init solution */
+        for (BasicBlock &BB : F) {
+
+            for (Instruction &Inst : BB) {
+
+                Instruction *I = &Inst;
+                if (isa<StoreInst> (I)) {
+                    StoreInst *SI = dyn_cast<StoreInst> (I);
+
+                    if (SI->getValueOperand()->getType()->isPointerTy()) {
+                        AllocaInst *AI = getStackPtr(SI->getPointerOperand());
+                        if (AI) {
+                            defs[I] = AI;
+                        }
+                    }
+                }
+                else if (isa<LoadInst> (I)) {
+                    LoadInst *LI = dyn_cast<LoadInst> (I);
+
+                    if (LI->getPointerOperandType()->getPointerElementType()->isPointerTy()) {
+
+                        AllocaInst *AI = getStackPtr(LI->getPointerOperand());
+                        if (AI) {
+                            uses[I] = AI;
+                        }
+
+                    }
+                }
+                else if (isa<CallInst> (I)) {
+                    CallInst *CI = dyn_cast<CallInst> (I);
+
+                    Function *F = CI->getCalledFunction();
+                    
+                    if (!F) continue;
+
+                    StringRef fname = F->getName();
+
+                    if (fname.find("llvm.") == 0 ||
+                            fname.find("clang.") == 0) {
+                        continue;
+                    }
+                    if (fname == "regptr" || fname == "deregptr" ||
+                            fname == "voidcallstack" || fname == "checkstackvar")  {
+
+                        continue;
+                    }
+                    
+                    for (Value *V : CI->arg_operands()) {
+                        AllocaInst *AI = getStackPtr(V);
+
+                        if (AI) {
+                            refs[I].insert(AI);
+                        }
+                    }
+                }
+            }
+        }
+
+        /* 
+         * Liveness algorithm
+         * https://www.cs.colostate.edu/~mstrout/CS553/slides/lecture03.pdf
+         * Repeat until converge 
+         */
+        while (changed) {
+            changed = false;
+            for (BasicBlock &BB: F) {
+                for (auto i = BB.rbegin(), e = BB.rend(); i != e; i++) {
+                    Instruction *I = &*i;
+                    std::set<AllocaInst*>in_res;
+                    std::set<AllocaInst*>out_res;
+
+                    in_res = out[I];
+                    for (AllocaInst *AI: refs[I]) {
+                        in_res.erase(AI);
+                    }
+                    in_res.erase(defs[I]);
+                    in_res.insert(uses[I]);
+
+                    if (I == BB.getTerminator()) {
+    
+                        if (isa<BranchInst>(I)) {
+                            BranchInst *BI = dyn_cast<BranchInst>(I);
+                            for (unsigned int i = 0; i < BI->getNumSuccessors(); i++) {
+                                BasicBlock *n = BI->getSuccessor(i);
+                                Instruction *ni = &n->front();
+                                for (AllocaInst *AI: in[ni]) {
+                                    out_res.insert(AI);
+                                }
+                            }
+                        }
+                        else if (isa<SwitchInst>(I)) {
+                            SwitchInst *SI = dyn_cast<SwitchInst>(I);
+                            for (unsigned int i = 0; i < SI->getNumSuccessors(); i++) {
+                                BasicBlock *n = SI->getSuccessor(i);
+                                Instruction *ni = &n->front();
+                                for (AllocaInst *AI: in[ni]) {
+                                    out_res.insert(AI);
+                                }
+                            }
+                        }
+                        else if (isa<ReturnInst> (I)) {
+
+                        }
+                        else if (isa<UnreachableInst> (I)) {
+
+                        }
+                        else {
+                            errs() << *I << "\n";
+                        }
+                        
+                    } else {
+                        Instruction *ni = I->getNextNonDebugInstruction();
+                        assert(ni);
+                        out_res = in[ni];
+                    }
+                    
+                    /* Update if anything changes */
+                    if (in_res != in[I]) {
+                        in[I] = in_res;
+                        changed = true;
+                    }
+
+                    if (out_res != out[I]) {
+                        out[I] = out_res;
+                        changed = true;
+                    }
+
+                }
+            }
+        }
+
+        return false;
+    }
+};
 
 /* 
  * Class that examines important local pointer variables 
  * And register them to suppress them from lift to LLVM reg
  */
-struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalysis {
+struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalysis, public LivenessAnalysis {
     static char ID;
     std::set<AllocaInst*> stack_ptrs;
     std::map<AllocaInst*, DIVariable*> stack_vars;
     std::vector<CallInst*> calls_to_instr;
     std::map<AllocaInst*, std::vector<StoreInst*>> stores_to_instr;
-    std::map<AllocaInst*, std::set<Instruction*>> defs;
-    std::map<AllocaInst*, std::set<Instruction*>> uses;
     
     HeapExpoStackTracker () : HeapExpoFuncTracker(ID) {}
     
@@ -773,7 +775,6 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
                     AllocaInst *AI = getStackPtr(SI->getPointerOperand());
                     if (AI)  {
 
-                        defs[AI].insert(I);
                         stack_ptrs.insert(AI);
 
                         if (isa<ConstantPointerNull>(SI->getValueOperand())) {
@@ -794,7 +795,6 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
 
                 AllocaInst *AI = getStackPtr(LI->getPointerOperand());
                 if (AI && AI->getAllocatedType()->isPointerTy())  {
-                    uses[AI].insert(I);
                     stack_ptrs.insert(AI);
                 }
 
@@ -849,15 +849,6 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
                     fname == "voidcallstack" || fname == "checkstackvar")
                     continue;
 
-                /* A call with stack var addr is considered a Def */
-                for (Value *V : CI->arg_operands()) {
-
-                    AllocaInst *AI = getStackPtr(V);
-
-                    if (AI)
-                        defs[AI].insert(I);
-
-                }
 
                 if (has_free_call(F))
                     calls_to_instr.push_back(CI);
@@ -867,26 +858,29 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
         }
 
 
+        /* Liveness */
+        getFunctionLiveness(F);
+
         std::set<AllocaInst*> aset;
         for (CallInst *CI : calls_to_instr) {
 
             bool v = false;
             
+            
             for (AllocaInst *AI: stack_ptrs) {
-                if (isPotentiallyDefed(CI, defs[AI]) &&
-                        isPotentiallyUsed(CI, uses[AI], defs[AI])) {
+                if (out.find(CI) != out.end() && out[CI].find(AI) != out[CI].end()) {
 
                     instrCheck(CI, AI, stack_vars[AI]);
                     aset.insert(AI);
                     v = true;
+
                 }
             }
+            
             if (v) instrVoid(CI);
         }
 
-        int num = 0;
         for (AllocaInst* AI : aset) {
-            num += defs[AI].size();
             for (StoreInst* SI: stores_to_instr[AI]) {
                 instrStackReg(SI);
                 stack_store_instr_cnt++;
@@ -894,8 +888,6 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
         }
 
         stack_ptrs.clear();
-        uses.clear();
-        defs.clear();
         calls_to_instr.clear();
         return false;
 
@@ -976,6 +968,7 @@ struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
     
 };
 
+
 }
 
 
@@ -1003,14 +996,14 @@ static RegisterPass<HeapExpoCallGraphAnalysis> W("HeapExpoCallGraph", "HeapExpo 
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoGlobalTracker());
-    PM.add(new HeapExpoHeapTracker());
+    //PM.add(new HeapExpoHeapTracker());
     //PM.add(new HeapExpoStackTracker());
 }
 
 static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
-    //PM.add(new HeapExpoStackTracker());
-    //PM.add(new HeapExpoHeapTracker());
+    PM.add(new HeapExpoStackTracker());
+    PM.add(new HeapExpoHeapTracker());
     
     //PM.add(new HeapExpoCallGraphAnalysis());
 }
