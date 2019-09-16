@@ -666,8 +666,8 @@ struct LivenessAnalysis{
         while (changed) {
             changed = false;
             for (BasicBlock &BB: F) {
-                for (auto i = BB.rbegin(), e = BB.rend(); i != e; i++) {
-                    Instruction *I = &*i;
+                for (auto it = BB.rbegin(), e = BB.rend(); it != e; it++) {
+                    Instruction *I = &*it;
                     std::set<AllocaInst*>in_res;
                     std::set<AllocaInst*>out_res;
 
@@ -683,8 +683,13 @@ struct LivenessAnalysis{
                         if (isa<BranchInst>(I)) {
                             BranchInst *BI = dyn_cast<BranchInst>(I);
                             for (unsigned int i = 0; i < BI->getNumSuccessors(); i++) {
+                                //errs() << *BI << " " << i << " " << BI->getNumSuccessors() << "\n";
                                 BasicBlock *n = BI->getSuccessor(i);
                                 Instruction *ni = &n->front();
+                                while (ni != n->getTerminator() && 
+                                            !(isa<StoreInst>(ni) || isa<LoadInst>(ni) || isa<CallInst>(ni))) {
+                                    ni = ni->getNextNonDebugInstruction();
+                                }
                                 for (AllocaInst *AI: in[ni]) {
                                     out_res.insert(AI);
                                 }
@@ -695,6 +700,10 @@ struct LivenessAnalysis{
                             for (unsigned int i = 0; i < SI->getNumSuccessors(); i++) {
                                 BasicBlock *n = SI->getSuccessor(i);
                                 Instruction *ni = &n->front();
+                                while (ni != n->getTerminator() &&
+                                            !(isa<StoreInst>(ni) || isa<LoadInst>(ni) || isa<CallInst>(ni))) {
+                                    ni = ni->getNextNonDebugInstruction();
+                                }
                                 for (AllocaInst *AI: in[ni]) {
                                     out_res.insert(AI);
                                 }
@@ -710,10 +719,21 @@ struct LivenessAnalysis{
                             errs() << *I << "\n";
                         }
                         
-                    } else {
-                        Instruction *ni = I->getNextNonDebugInstruction();
+                    } 
+                    //else {
+                    else if (isa<BranchInst>(I) || isa<SwitchInst>(I) || isa<UnreachableInst>(I) ||
+                                    isa<StoreInst>(I) || isa<LoadInst>(I) || isa<CallInst>(I)) {
+                        Instruction *ni = I;
+                        do {
+                            ni = ni->getNextNonDebugInstruction(); 
+                        //} while (false);
+                        } while (ni != BB.getTerminator() && 
+                                    !(isa<StoreInst>(ni) || isa<LoadInst>(ni) || isa<CallInst>(ni)));
                         assert(ni);
                         out_res = in[ni];
+                    }
+                    else {
+                        continue;
                     }
                     
                     /* Update if anything changes */
