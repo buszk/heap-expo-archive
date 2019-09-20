@@ -579,9 +579,11 @@ struct HeapExpoCallGraphAnalysis: public FunctionPass, public CallGraphAnalysis 
 struct LivenessAnalysis{
 
     /* Set of live variables at the start of instruction */
-    std::unordered_map<Instruction*, std::set<AllocaInst*>> in;
+    std::unordered_map<Instruction*, std::unordered_map<AllocaInst*, std::list<Instruction*>>> in;
     /* Set of live variables at the end of instruction */
-    std::unordered_map<Instruction*, std::set<AllocaInst*>> out;
+    std::unordered_map<Instruction*, std::unordered_map<AllocaInst*, std::list<Instruction*>>> out;
+    /* Set of stores that can reach the call instruction */
+    //std::unordered_map<Instruction*, std::unordered_map<AllocaInst*, std::list<>> call2store;
 
     LivenessAnalysis() {};
 
@@ -596,6 +598,9 @@ struct LivenessAnalysis{
         std::unordered_map<Instruction*, AllocaInst*> uses;
         /* References: call instructions that have stack addresses as reference */
         std::unordered_map<Instruction*, std::set<AllocaInst*>> refs;
+
+        /* Call instructions that can be reached from instruction */
+        //std::unordered_map<Instruction*, std::unordered_set<CallInst*>> store2calls;
         bool changed = true;
 
 
@@ -668,15 +673,23 @@ struct LivenessAnalysis{
             for (BasicBlock &BB: F) {
                 for (auto it = BB.rbegin(), e = BB.rend(); it != e; it++) {
                     Instruction *I = &*it;
-                    std::set<AllocaInst*>in_res;
-                    std::set<AllocaInst*>out_res;
+                    std::unordered_map<AllocaInst*,std::list<Instruction*>>in_res;
+                    std::unordered_map<AllocaInst*,std::list<Instruction*>>out_res;
 
                     in_res = out[I];
-                    for (AllocaInst *AI: refs[I]) {
-                        in_res.erase(AI);
+
+                    if (isa<BranchInst>(I) || isa<SwitchInst>(I) || isa<UnreachableInst>(I) ||
+                            isa<StoreInst>(I) || isa<LoadInst>(I) || isa<CallInst>(I)) {
+                        
+                        for (AllocaInst *AI: refs[I]) {
+                            in_res.erase(AI);
+                        }
+                        in_res.erase(defs[I]);
+                        in_res[uses[I]].push_back(I);
+
+                        //in_res.insert(uses[I]);
+
                     }
-                    in_res.erase(defs[I]);
-                    in_res.insert(uses[I]);
 
                     if (I == BB.getTerminator()) {
     
@@ -690,8 +703,10 @@ struct LivenessAnalysis{
                                             !(isa<StoreInst>(ni) || isa<LoadInst>(ni) || isa<CallInst>(ni))) {
                                     ni = ni->getNextNonDebugInstruction();
                                 }
-                                for (AllocaInst *AI: in[ni]) {
-                                    out_res.insert(AI);
+                                for (auto kv: in[ni]) {
+                                    AllocaInst *AI = kv.first;
+                                    out_res[AI].push_back(AI);
+                                    //out_res.insert(AI);
                                 }
                             }
                         }
@@ -704,8 +719,10 @@ struct LivenessAnalysis{
                                             !(isa<StoreInst>(ni) || isa<LoadInst>(ni) || isa<CallInst>(ni))) {
                                     ni = ni->getNextNonDebugInstruction();
                                 }
-                                for (AllocaInst *AI: in[ni]) {
-                                    out_res.insert(AI);
+                                for (auto kv: in[ni]) {
+                                    AllocaInst *AI = kv.first;
+                                    out_res[AI].push_back(AI);
+                                    //out_res.insert(AI);
                                 }
                             }
                         }
@@ -716,11 +733,10 @@ struct LivenessAnalysis{
 
                         }
                         else {
-                            errs() << *I << "\n";
+                            //errs() << *I << "\n";
                         }
                         
                     } 
-                    //else {
                     else if (isa<BranchInst>(I) || isa<SwitchInst>(I) || isa<UnreachableInst>(I) ||
                                     isa<StoreInst>(I) || isa<LoadInst>(I) || isa<CallInst>(I)) {
                         Instruction *ni = I;
