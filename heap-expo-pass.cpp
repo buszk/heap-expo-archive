@@ -25,6 +25,7 @@
 
 #include <vector>
 #include <set>
+#include <unordered_set>
 #include <list>
 #include <algorithm>
 
@@ -583,7 +584,138 @@ struct LivenessAnalysis{
     /* Set of live variables at the end of instruction */
     std::unordered_map<Instruction*, std::set<AllocaInst*>> out;
 
+    /* */
+    std::unordered_set<StoreInst*> stores;
+
+    
+
     LivenessAnalysis() {};
+
+    bool getStoreInstructionLiveness(Function &F, std::vector<CallInst*> calls, std::set<AllocaInst*> vars, 
+            std::unordered_map<AllocaInst*, std::vector<StoreInst*>> stores_to_instr) {
+        stores.clear();
+        
+        for (AllocaInst* AI : vars) {
+
+            /* If a instruction can reach a target CallInst in calls */
+            std::unordered_map<Instruction*, bool> in;
+            std::unordered_map<Instruction*, bool> out;
+            /* Init result */
+            for (Instruction* ci : calls) {
+                in[ci] = true;
+            }
+            for (auto si: stores_to_instr[AI]) {
+                in[si] = false;
+            }
+            bool changed = true;
+
+            while (changed) {
+                changed = false;
+                for (BasicBlock &BB: F) {
+                    for (auto it = BB.rbegin(), e = BB.rend(); it != e; it++) {
+                        Instruction *I = &*it;
+                        bool in_res = out[I];
+                            
+                        if (isa<StoreInst> (I)) {
+                            StoreInst *SI = dyn_cast<StoreInst> (I);
+
+                            if (SI->getValueOperand()->getType()->isPointerTy()) {
+                                AllocaInst *ai = getStackPtr(SI->getPointerOperand());
+                                if (AI == ai) {
+                                    in_res = false;
+                                    if (out[I]) {
+                                        stores.insert(SI);
+                                    }
+                                }
+
+                            }
+
+                        }
+                        
+                        if (in_res != in[I]) {
+                            in[I] = in_res;
+                            changed = true;
+                        }
+
+                        
+                        bool out_res = out[I];
+
+                        if (out_res) {
+                            continue;
+                        }
+
+                        if (I == BB.getTerminator()) {
+        
+                            if (isa<BranchInst>(I)) {
+                                BranchInst *BI = dyn_cast<BranchInst>(I);
+                                for (unsigned int i = 0; i < BI->getNumSuccessors(); i++) {
+                                    //errs() << *BI << " " << i << " " << BI->getNumSuccessors() << "\n";
+                                    BasicBlock *n = BI->getSuccessor(i);
+                                    Instruction *ni = &n->front();
+                                    while (ni != n->getTerminator() && 
+                                                !(isa<StoreInst>(ni) || isa<CallInst>(ni))) {
+                                        ni = ni->getNextNonDebugInstruction();
+                                    }
+                                    if (in[ni]) {
+                                        out_res = true;
+                                    }
+                                }
+                            }
+                            else if (isa<SwitchInst>(I)) {
+                                SwitchInst *SI = dyn_cast<SwitchInst>(I);
+                                for (unsigned int i = 0; i < SI->getNumSuccessors(); i++) {
+                                    BasicBlock *n = SI->getSuccessor(i);
+                                    Instruction *ni = &n->front();
+                                    while (ni != n->getTerminator() &&
+                                                !(isa<StoreInst>(ni) || isa<CallInst>(ni))) {
+                                        ni = ni->getNextNonDebugInstruction();
+                                    }
+                                    if (in[ni]) {
+                                        out_res = true;
+                                    }
+                                }
+                            }
+                            else if (isa<ReturnInst> (I)) {
+
+                            }
+                            else if (isa<UnreachableInst> (I)) {
+
+                            }
+                            else {
+                                //errs() << *I << "\n";
+                            }
+                            
+                        } 
+                        else if (isa<StoreInst>(I) || isa<CallInst>(I)) {
+
+                            Instruction *ni = I;
+                            do {
+                                ni = ni->getNextNonDebugInstruction(); 
+                            } while (ni != BB.getTerminator() && 
+                                        !(isa<StoreInst>(ni) || isa<CallInst>(ni)));
+                            assert(ni);
+                            out_res = in[ni];
+
+
+
+                        }
+                        else {
+                            continue;
+                        }
+                    
+                        /* Update if anything changes */
+                        if (out_res != out[I]) {
+                            out[I] = out_res;
+                            changed = true;
+                        }
+                        
+                    }
+                }
+            }
+        }
+        return false;
+        
+    }
 
     bool getFunctionLiveness(Function &F) {
 
@@ -716,7 +848,7 @@ struct LivenessAnalysis{
 
                         }
                         else {
-                            errs() << *I << "\n";
+                            //errs() << *I << "\n";
                         }
                         
                     } 
@@ -764,7 +896,7 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
     std::set<AllocaInst*> stack_ptrs;
     std::map<AllocaInst*, DIVariable*> stack_vars;
     std::vector<CallInst*> calls_to_instr;
-    std::map<AllocaInst*, std::vector<StoreInst*>> stores_to_instr;
+    std::unordered_map<AllocaInst*, std::vector<StoreInst*>> stores_to_instr;
     
     HeapExpoStackTracker () : HeapExpoFuncTracker(ID) {}
     
@@ -900,12 +1032,21 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
             if (v) instrVoid(CI);
         }
 
+        getStoreInstructionLiveness(F, calls_to_instr, aset, stores_to_instr);
+
+        for (StoreInst* SI: stores) {
+            instrStackReg(SI);
+            SI->setVolatile(true);
+            stack_store_instr_cnt++;
+        }
+        /*
         for (AllocaInst* AI : aset) {
             for (StoreInst* SI: stores_to_instr[AI]) {
                 instrStackReg(SI);
                 stack_store_instr_cnt++;
             }
         }
+        */
 
         stack_ptrs.clear();
         calls_to_instr.clear();
