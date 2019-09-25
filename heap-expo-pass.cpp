@@ -10,6 +10,9 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/LoopPass.h"
+#include "llvm/IR/Dominators.h"
 
 #include "llvm-include.h"
 
@@ -675,6 +678,20 @@ struct LivenessAnalysis{
                                     }
                                 }
                             }
+                            else if (isa<IndirectBrInst>(I)) {
+                                IndirectBrInst *IBI = dyn_cast<IndirectBrInst>(I);
+                                for (unsigned int i = 0; i < IBI->getNumSuccessors(); i++) {
+                                    BasicBlock *n = IBI->getSuccessor(i);
+                                    Instruction *ni = &n->front();
+                                    while (ni != n->getTerminator() &&
+                                                !(isa<StoreInst>(ni) || isa<CallInst>(ni))) {
+                                        ni = ni->getNextNonDebugInstruction();
+                                    }
+                                    if (in[ni]) {
+                                        out_res = true;
+                                    }
+                                }
+                            }
                             else if (isa<ReturnInst> (I)) {
 
                             }
@@ -834,6 +851,20 @@ struct LivenessAnalysis{
                                 Instruction *ni = &n->front();
                                 while (ni != n->getTerminator() &&
                                             !(isa<StoreInst>(ni) || isa<LoadInst>(ni) || isa<CallInst>(ni))) {
+                                    ni = ni->getNextNonDebugInstruction();
+                                }
+                                for (AllocaInst *AI: in[ni]) {
+                                    out_res.insert(AI);
+                                }
+                            }
+                        }
+                        else if (isa<IndirectBrInst>(I)) {
+                            IndirectBrInst *IBI = dyn_cast<IndirectBrInst>(I);
+                            for (unsigned int i = 0; i < IBI->getNumSuccessors(); i++) {
+                                BasicBlock *n = IBI->getSuccessor(i);
+                                Instruction *ni = &n->front();
+                                while (ni != n->getTerminator() &&
+                                            !(isa<StoreInst>(ni) || isa<CallInst>(ni))) {
                                     ni = ni->getNextNonDebugInstruction();
                                 }
                                 for (AllocaInst *AI: in[ni]) {
@@ -1129,6 +1160,69 @@ struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
     
 };
 
+struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
+    static char ID;
+
+    HeapExpoLoop (): LoopPass(ID) {}
+
+    LoopInfo *LI;
+    DominatorTree *DT;
+
+    void loopcallcheck(Loop *L, bool *lcallsfree, bool *lcallsregptr) {
+
+        for (auto i = L->block_begin(), e = L->block_end(); i != e; i++) {
+            BasicBlock *BB = *i;
+            if (LI->getLoopFor(BB) == L) {
+                for (auto i = BB->begin(), e = BB->end(); i != e; i++) {
+                    Instruction *I = &*i;
+                    if (isa<CallInst> (I)) {
+                        CallInst *CI = dyn_cast<CallInst> (I);
+                        Function *F = CI->getCalledFunction();
+                        if (F) {
+                            StringRef fname = F->getName();
+                            if (fname.find("llvm.") == 0 || 
+                                    fname.find("clang.") == 0) {
+                                continue;
+                            }
+                            if (fname == "regptr" || fname == "deregptr" || fname == "stack_regptr") {
+                                *lcallsregptr = true;        
+                                continue;
+                            }
+                            if (fname == "voidcallstack" || fname == "checkstackvar") {
+                                continue;
+                            }
+                            
+                            if (!*lcallsfree && has_free_call(F)) {
+                                *lcallsfree = true;
+                            }
+
+                        } 
+                        else {
+                            *lcallsfree = true;
+                        }
+
+                    }
+                }
+            }
+        }
+
+    }
+    
+    virtual bool runOnLoop(Loop *L, LPPassManager &LPM) { 
+        bool freecall = false;
+        bool regptrcall = false;
+        bool changed = false;
+        
+        BasicBlock *Header = L->getHeader();
+        Function *F = Header->getParent();
+
+        LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+        DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+
+
+    }
+
+};
 
 }
 
@@ -1140,6 +1234,7 @@ char HeapExpoGlobalTracker::ID = 1;
 char HeapExpoHeapTracker::ID = 2;
 char HeapExpoStackTracker::ID = 3;
 char HeapExpoCallGraphAnalysis::ID = 4;
+char HeapExpoLoop::ID = 5;
 
 static RegisterPass<HeapExpoGlobalTracker> X("HeapExpoGlobal", "HeapExpo Global Pass",
                              false /* Only looks at CFG */,
@@ -1153,6 +1248,9 @@ static RegisterPass<HeapExpoStackTracker> Z("HeapExpoStack", "HeapExpo Stack Pas
 static RegisterPass<HeapExpoCallGraphAnalysis> W("HeapExpoCallGraph", "HeapExpo Call Graph Analysis",
                              false /* Only looks at CFG */,
                              true  /* Analysis Pass */);
+static RegisterPass<HeapExpoLoop> V("HeapExpoLoop", "HeapExpo Loop Optimizer",
+                             false /* Only looks at CFG */,
+                             false  /* Analysis Pass */);
 
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
