@@ -740,11 +740,11 @@ EXT_C void regptr(char* ptr_loc_, char* ptr_val_, uint32_t id) {
     struct object_info_t *obj_info, *ptr_obj_info;
     obj_addr = ptr_obj_addr = 0;
     obj_info = ptr_obj_info = NULL;
-    
+/*    
     if (*(uintptr_t*)ptr_loc == ptr_val ) {
         return;
     }
-
+*/
     
     deregptr_(ptr_loc);
 

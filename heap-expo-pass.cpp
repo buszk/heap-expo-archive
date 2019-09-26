@@ -1163,10 +1163,27 @@ struct HeapExpoHeapTracker : public HeapExpoFuncTracker {
 struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
     static char ID;
 
+    size_t loop_regptr_optimized_cnt = 0;
+
     HeapExpoLoop (): LoopPass(ID) {}
 
     LoopInfo *LI;
     DominatorTree *DT;
+
+    virtual bool doInitilization(Loop *L, LPPassManager &LPM) {
+        loop_regptr_optimized_cnt = 0;
+        return false;
+    }
+
+    virtual bool doFinalization() {
+        std::ostringstream ss;
+        if (loop_regptr_optimized_cnt) {
+            ss << "Optimized " << loop_regptr_optimized_cnt<< 
+                " regptr by moving them out of loops\n";
+        }
+        LOG(LVL_INFO) << ss.str();
+        return false;
+    }
 
     void loopcallcheck(Loop *L, bool *lcallsfree, bool *lcallsregptr) {
 
@@ -1213,14 +1230,87 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
         bool regptrcall = false;
         bool changed = false;
         
-        BasicBlock *Header = L->getHeader();
-        Function *F = Header->getParent();
-
         LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
         DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
+        for (auto LoopItr = L->begin(), LoopItrE = L->end(); LoopItr != LoopItrE; LoopItr++) {
+            Loop *InnerL = *LoopItr;
+            loopcallcheck(InnerL, &freecall, &regptrcall);
+
+
+        }
+        loopcallcheck(L, &freecall, &regptrcall);
+
+        if (freecall) {
+            errs() << "Freecall\n";
+            return false;
+        }
+        if (!regptrcall) {
+            errs() << "No regptrcall\n";
+            return false;
+        }
+
+        errs() << "regptr but no free\n";
+
+        SmallVector<Instruction*, 8> InstToDelete;
+        for (auto i = L->block_begin(), e = L->block_end(); i != e; i++) { 
+            BasicBlock *BB = *i;
+            if (LI->getLoopFor(BB) == L) {
+                for (auto i = BB->begin(), e = BB->end(); i != e; i++) {
+                    Instruction *I = &*i;
+                    if (isa<CallInst>(I)) {
+                        CallInst *CI = dyn_cast<CallInst>(I);
+                        Function *F = CI->getCalledFunction();
+                        if (F) {
+                            StringRef fname = F->getName();
+                            if (fname == "regptr" || fname == "deregptr" || fname == "stack_regptr") {
+                                errs() << "regptr\n";
+                                BasicBlock *EXBB = L->getExitBlock();
+                                SmallVector<BasicBlock*, 8> ExitBlocks;
+                                L->getExitBlocks(ExitBlocks);
+
+                                bool dominates = true;
+
+                                for (unsigned i = 0; i != ExitBlocks.size(); i++) {
+                                    if (!DT->dominates(I->getParent(), ExitBlocks[i])) {
+                                        dominates = false;
+                                    }
+                                }
+
+                                if (dominates && EXBB) {
+                                    errs() << *I->getFunction();
+                                    Instruction *EXBBI = &EXBB->front();
+                                    I->clone()->insertBefore(EXBBI);
+                                    InstToDelete.push_back(I);
+                                    changed = true;
+                                }
+
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        while (!InstToDelete.empty()) {
+            Instruction *del = InstToDelete.pop_back_val();
+            loop_regptr_optimized_cnt ++;
+            del->eraseFromParent();
+        }
+
+        errs() << "After optimization\n";
+        errs() << *L->getHeader()->getParent();
+
+        return changed;
 
     }
+
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+        AU.setPreservesCFG();
+        AU.addRequired<LoopInfoWrapperPass>();
+        AU.addRequired<DominatorTreeWrapperPass>();
+    }
+
 
 };
 
@@ -1263,6 +1353,7 @@ static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoStackTracker());
     PM.add(new HeapExpoHeapTracker());
+    PM.add(new HeapExpoLoop());
     
     //PM.add(new HeapExpoCallGraphAnalysis());
 }
