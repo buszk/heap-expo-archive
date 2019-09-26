@@ -1185,6 +1185,63 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
         return false;
     }
 
+    bool HATcheck (Instruction * AI, User *U, Loop * L) {
+		if (StoreInst * SI = dyn_cast < StoreInst > (U)) {
+		    if (AI == SI->getValueOperand ())
+				return true;
+		}
+		else if (PtrToIntInst * PI = dyn_cast < PtrToIntInst > (U)) {
+		    if (AI == PI->getOperand (0))
+			    return true;
+		}
+
+		else if (CallInst * CI = dyn_cast < CallInst > (U)) {
+		  	Function *F = CI->getCalledFunction ();
+		  	if (F) {
+				StringRef fname = F->getName ();
+                if (fname == "regptr"|| fname == "deregptr" ||
+                    fname == "stack_regptr" || fname == "global_hook" ||
+                    fname == "voidcallstack" || fname == "checkstackvar") {
+			  		return false;
+				}
+		  	}
+		  	return true;
+		}
+		else if (InvokeInst *II = dyn_cast < InvokeInst > (U)) {
+		  	return true;
+		}
+		else if (SelectInst * SI = dyn_cast < SelectInst > (U)) {
+		  	if (HAT (SI, L))
+				return true;
+		}
+		else if (PHINode * PN = dyn_cast < PHINode > (U)) {
+            if (HAT (PN, L))
+                return true;
+		}
+		else if (GetElementPtrInst * GEP =
+			 dyn_cast < GetElementPtrInst > (U)) {
+		  	if (AI == GEP->getPointerOperand ())
+				return true;
+		  	else if (HAT (GEP, L))
+				return true;
+
+		}
+		else if (BitCastInst * BI = dyn_cast < BitCastInst > (U)) {
+		  	if (HAT (BI, L))
+				return true;
+		}
+		return false;
+    }
+
+    bool HAT(Instruction *AI, Loop *L) {
+        for (User *U: AI->users()) {
+            if (HATcheck(AI, U, L)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void loopcallcheck(Loop *L, bool *lcallsfree, bool *lcallsregptr) {
 
         for (auto i = L->block_begin(), e = L->block_end(); i != e; i++) {
@@ -1265,19 +1322,42 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
                             StringRef fname = F->getName();
                             if (fname == "regptr" || fname == "deregptr" || fname == "stack_regptr") {
                                 errs() << "regptr\n";
+                                Instruction *AI = nullptr;
+                                bool constant = false;
+                                if (CastInst *cast = dyn_cast<CastInst>(CI->getArgOperand(0))) {
+                                    Value *arg = cast->getOperand(0);
+                                    if ((AI = dyn_cast<Instruction>(arg))) {
+                                        if (HAT(AI, L)) {
+                                            errs() << "1\n";
+                                            continue;
+                                        }
+                                        if (isa<GetElementPtrInst>(AI)) {
+                                            errs() << "2\n";
+                                            continue;
+                                        }
+                                    }
+                                    else if (isa<Constant>(arg)) {
+                                        constant = true;
+                                    }
+                                    else {
+                                        errs() << "3\n";
+                                        continue;
+                                    }
+                                }
                                 BasicBlock *EXBB = L->getExitBlock();
                                 SmallVector<BasicBlock*, 8> ExitBlocks;
                                 L->getExitBlocks(ExitBlocks);
 
                                 bool dominates = true;
 
-                                for (unsigned i = 0; i != ExitBlocks.size(); i++) {
-                                    if (!DT->dominates(I->getParent(), ExitBlocks[i])) {
+                                for (unsigned i = 0; AI && i != ExitBlocks.size(); i++) {
+                                    if (!DT->dominates(AI->getParent(), ExitBlocks[i])) {
+                                        errs() << *AI->getParent(); 
                                         dominates = false;
                                     }
                                 }
 
-                                if (dominates && EXBB) {
+                                if ((dominates||constant) && EXBB) {
                                     errs() << *I->getFunction();
                                     Instruction *EXBBI = &EXBB->front();
                                     I->clone()->insertBefore(EXBBI);
