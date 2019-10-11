@@ -15,6 +15,8 @@
 #include <libunwind-x86.h>
 #endif
 #include <execinfo.h>
+#include <link.h>
+#include <dlfcn.h>
 
 #include "rt-malloc.h"
 #include "rt-include.h"
@@ -81,7 +83,7 @@ ESP_ST thread_local rtype *residuals = NULL;
 ESP_ST thread_local int64_t counter = 0;
 ESP_ST int64_t residual_live_limit = 1000;
 
-using s2dtype = he_unordered_set<uint32_t>;
+using s2dtype = he_unordered_map<uint32_t, uint32_t>;
 ESP_ST s2dtype *sig2dbg;
 
 #ifdef MULTITHREADING
@@ -350,36 +352,67 @@ inline void update_residual_loc(uintptr_t oldloc, uintptr_t newloc) {
     }
 }
 
+inline void address2offset(uintptr_t* array, int cnt) {
+    for (int i = 0; i < cnt ; i++) {
+        Dl_info info;
+        if (dladdr((void*)array[i], &info) &&
+                info.dli_fname != NULL && info.dli_fname[0] != '\0')  {
+            int64_t diff = array[i] - (uintptr_t)info.dli_fbase;
+            array[i] = diff;
+        }
+    }
+}
+
+/*
+ * This function provides the same signature despite the addresses
+ * that ASLR load the binary and libraries
+ */
 inline uint32_t get_signature() {
     /* ignore this func, hook, and malloc/free */
     int cnt = -3;
     int size = 8;
     void *array[8] = {0};
     uint32_t sig = 0;
+    uint32_t res = 0;
+
     unw_cursor_t cursor;
     unw_context_t uc;
     unw_word_t ip;
     unw_getcontext(&uc);
     unw_init_local(&cursor, &uc);
+
     while (unw_step(&cursor) > 0 && cnt < size) {
         unw_get_reg(&cursor, UNW_REG_IP, &ip);
         if (++cnt >= 0) {
             array[cnt] = (void*)ip;
-            //sig ^= ((uintptr_t)ip & 0xffff) << (cnt%4)*16;
         }
     }
+
     sig = hash_addr_list((uintptr_t*)array, cnt);
     SLOCK(sig_mutex);
     if (sig2dbg->find(sig) == sig2dbg->end()) {
-        PRINTF(2, "SIG[%08x][%d]:\n", sig, cnt);
-        if (print_mode >= 2)
+        SUNLOCK(sig_mutex);
+
+        if (print_mode >= 2) {
             backtrace_symbols_fd(array, cnt, fdcopy);
-        SUNLOCK(sig_mutex);
+        }
+
+        /* Update array from addresses to offsets */
+        address2offset((uintptr_t*)array, cnt);
+
+        res = hash_addr_list((uintptr_t*) array, cnt);
+
+        PRINTF(2, "SIG[%08x][%d]:\n", res, cnt);
+
         LOCK(sig_mutex);
-        sig2dbg->insert(sig);
+        (*sig2dbg)[sig] = res;
         UNLOCK(sig_mutex);
+
     } else {
+
+        res = sig2dbg->at(sig);
         SUNLOCK(sig_mutex);
+
     }
     return sig;
 }

@@ -82,6 +82,7 @@ int main(int argc, char** argv) {
         params.push_back("-lpthread");
         params.push_back("-lunwind");
         params.push_back("-lm");
+        params.push_back("-ldl");
         params.push_back("-rdynamic");
 
         if (x_set) {

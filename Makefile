@@ -8,7 +8,7 @@ CXXFLAGS   ?= -O2 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 			 -Wno-variadic-macros -std=c++17
 
-LD_FLAGS   += -rdynamic
+LD_FLAGS   += -rdynamic -ldl
 
 LTOFLAG     = 
 CXXLTOFLAG  =
