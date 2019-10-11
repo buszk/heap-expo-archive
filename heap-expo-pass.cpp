@@ -652,7 +652,6 @@ struct LivenessAnalysis{
                             if (isa<BranchInst>(I)) {
                                 BranchInst *BI = dyn_cast<BranchInst>(I);
                                 for (unsigned int i = 0; i < BI->getNumSuccessors(); i++) {
-                                    //errs() << *BI << " " << i << " " << BI->getNumSuccessors() << "\n";
                                     BasicBlock *n = BI->getSuccessor(i);
                                     Instruction *ni = &n->front();
                                     while (ni != n->getTerminator() && 
@@ -699,7 +698,6 @@ struct LivenessAnalysis{
 
                             }
                             else {
-                                //errs() << *I << "\n";
                             }
                             
                         } 
@@ -832,7 +830,6 @@ struct LivenessAnalysis{
                         if (isa<BranchInst>(I)) {
                             BranchInst *BI = dyn_cast<BranchInst>(I);
                             for (unsigned int i = 0; i < BI->getNumSuccessors(); i++) {
-                                //errs() << *BI << " " << i << " " << BI->getNumSuccessors() << "\n";
                                 BasicBlock *n = BI->getSuccessor(i);
                                 Instruction *ni = &n->front();
                                 while (ni != n->getTerminator() && 
@@ -879,7 +876,7 @@ struct LivenessAnalysis{
 
                         }
                         else {
-                            //errs() << *I << "\n";
+
                         }
                         
                     } 
@@ -1299,15 +1296,12 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
         loopcallcheck(L, &freecall, &regptrcall);
 
         if (freecall) {
-            errs() << "Freecall\n";
             return false;
         }
         if (!regptrcall) {
-            errs() << "No regptrcall\n";
             return false;
         }
 
-        errs() << "regptr but no free\n";
 
         SmallVector<Instruction*, 8> InstToDelete;
         for (auto i = L->block_begin(), e = L->block_end(); i != e; i++) { 
@@ -1321,18 +1315,15 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
                         if (F) {
                             StringRef fname = F->getName();
                             if (fname == "regptr" || fname == "deregptr" || fname == "stack_regptr") {
-                                errs() << "regptr\n";
                                 Instruction *AI = nullptr;
                                 bool constant = false;
                                 if (CastInst *cast = dyn_cast<CastInst>(CI->getArgOperand(0))) {
                                     Value *arg = cast->getOperand(0);
                                     if ((AI = dyn_cast<Instruction>(arg))) {
                                         if (HAT(AI, L)) {
-                                            errs() << "1\n";
                                             continue;
                                         }
                                         if (isa<GetElementPtrInst>(AI)) {
-                                            errs() << "2\n";
                                             continue;
                                         }
                                     }
@@ -1340,7 +1331,6 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
                                         constant = true;
                                     }
                                     else {
-                                        errs() << "3\n";
                                         continue;
                                     }
                                 }
@@ -1352,13 +1342,11 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
 
                                 for (unsigned i = 0; AI && i != ExitBlocks.size(); i++) {
                                     if (!DT->dominates(AI->getParent(), ExitBlocks[i])) {
-                                        errs() << *AI->getParent(); 
                                         dominates = false;
                                     }
                                 }
 
                                 if ((dominates||constant) && EXBB) {
-                                    errs() << *I->getFunction();
                                     Instruction *EXBBI = &EXBB->front();
                                     I->clone()->insertBefore(EXBBI);
                                     InstToDelete.push_back(I);
@@ -1378,8 +1366,6 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
             del->eraseFromParent();
         }
 
-        errs() << "After optimization\n";
-        errs() << *L->getHeader()->getParent();
 
         return changed;
 
