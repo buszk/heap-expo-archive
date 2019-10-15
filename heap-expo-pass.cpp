@@ -1177,6 +1177,7 @@ struct HeapExpoLoop: public LoopPass, CallGraphAnalysis {
         if (loop_regptr_optimized_cnt) {
             ss << "Optimized " << loop_regptr_optimized_cnt<< 
                 " regptr by moving them out of loops\n";
+            loop_regptr_optimized_cnt = 0;
         }
         LOG(LVL_INFO) << ss.str();
         return false;
@@ -1419,7 +1420,7 @@ static void registerMyPassEarly(const PassManagerBuilder &,
         legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoStackTracker());
     PM.add(new HeapExpoHeapTracker());
-    PM.add(new HeapExpoLoop());
+    //PM.add(new HeapExpoLoop());
     
     //PM.add(new HeapExpoCallGraphAnalysis());
 }

@@ -131,7 +131,7 @@ inline void __printf(int lvl, const char * format, ...) {
     va_list args;
     n1 = 0;//snprintf(str, 19, "[%016lx]", pthread_self());
     va_start(args, format);
-    n2 = vsnprintf(str+n1, 256, format, args);
+    n2 = vsnprintf(str+n1, 256-n1, format, args);
     va_end(args);
     if (!(n3 = write(fdcopy, str, n1+n2))) 
         abort();
@@ -544,8 +544,11 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     if (stack_record) {
         for (auto &p: stack_record->list) {
             if (p.dst_info == obj && p.val == *(uintptr_t*)p.loc) {
-                if (invalidate_mode > 1)
+                if (invalidate_mode > 1) {
                     *(uintptr_t*)p.loc |= KADDR; 
+                    PRINTF(3, "[HeapExpo][invalidate_stack]: ptr_loc:%016lx value:%016lx\n", p.loc, p.val);
+
+                }
             }
         }
     }
@@ -892,7 +895,12 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
             */
     if (is_invalid(cur_val)) {
         stack_pointer_t *ptr = stack_record->find(stack_pointer_t(ptr_loc));
-        if (ptr && ptr->dst_info->addr <= cur_val && cur_val < ptr->dst_info->addr + ptr->dst_info->size
+        /*
+        PRINTF(3, "[HeapExpo][checkstackvar] PTR[%016lx], %d %d %d %d\n", ptr_loc,
+                ptr, ptr->dst_info->addr <= cur_val, cur_val < ptr->dst_info->addr +
+                ptr->dst_info->size, ptr->dst_info->released);
+                */
+        if (ptr && (ptr->dst_info->addr | KADDR) <= cur_val && cur_val < (ptr->dst_info->addr + ptr->dst_info->size | KADDR)
                 && ptr->dst_info->released) {
             uint32_t store_id = ptr->store_id;
             PRINTF(2, "[HeapExpo][live_invalid_stack] PTR[%016lx] id:[%08lx] store_id[%08lx] val[%016lx]\n", 
