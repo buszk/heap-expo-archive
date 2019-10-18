@@ -1,6 +1,8 @@
-#include "shadow.h"
 #include "assert.h"
 #include "stdio.h"
+#include <string.h>
+
+#include "shadow.h"
 
 uintptr_t a = 0x19999999;
 int main() {

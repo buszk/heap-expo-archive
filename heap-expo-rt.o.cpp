@@ -6,7 +6,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <stdarg.h>
-#include <string.h>
+#include "rt-memcpy.h"
 
 #define UNW_LOCAL_ONLY
 #if __x86_64__
@@ -149,7 +149,12 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg)
 {
     uintptr_t addr = (uintptr_t) si->si_addr;
     if ((addr & KADDR) == KADDR) {
-        PRINTF(1, "[HeapExpo] Use-after-free detected: %016lx\n", addr);
+        if (addr & RABIT) {
+            PRINTF(1, "[HeapExpo] Use-after-reallocation detected: %016lx\n", addr);
+        }
+        else {
+            PRINTF(1, "[HeapExpo] Use-after-deallocation detected: %016lx\n", addr);
+        }
         exit(139);
     }
     else {
@@ -492,7 +497,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         
         /* Value did not change, set it to kernel space */
         if (invalidate)
-            *(uintptr_t*)ptr_loc = cur_val | KADDR; 
+            *(uintptr_t*)ptr_loc = cur_val | (KADDR | (obj->copied ? RABIT: 0)); 
 
         PRINTF(3, "[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, ptr_info->value);
         tmp.push_back(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
@@ -545,7 +550,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         for (auto &p: stack_record->list) {
             if (p.dst_info == obj && p.val == *(uintptr_t*)p.loc) {
                 if (invalidate_mode > 1) {
-                    *(uintptr_t*)p.loc |= KADDR; 
+                    *(uintptr_t*)p.loc |= (KADDR | (obj->copied ? RABIT: 0)); 
                     PRINTF(3, "[HeapExpo][invalidate_stack]: ptr_loc:%016lx value:%016lx\n", p.loc, p.val);
 
                 }
@@ -912,6 +917,22 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
 
     }
     
+}
+
+EXT_C void memcpy_hook(char* dst_, char*src_, size_t num) {
+
+    uintptr_t src = (uintptr_t) src_;
+    uintptr_t dst = (uintptr_t) dst_;
+    auto src_obj = memory_objects->find(src);
+    auto dst_obj = memory_objects->find(dst);
+
+    
+    if (src_obj && dst_obj && src_obj->addr == src && dst_obj->addr == dst) {
+        PRINTF(2, "[HeapExpo][memcpy] [%016lx:%08lx] -> [%016lx]\n", 
+                (uintptr_t)src, num, (uintptr_t)dst);
+
+        src_obj->copied = true;
+    }
 }
 
 #undef PRINTF

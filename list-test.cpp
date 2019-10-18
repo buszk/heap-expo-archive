@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include <assert.h>
+#include <string.h>
+
 #include "rt-stl.h"
 #include "rt-include.h"
 

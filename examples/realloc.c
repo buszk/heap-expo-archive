@@ -1,15 +1,19 @@
 #include <stdlib.h>
-
-
+#include <string.h>
+#include <stdio.h>
 
 void* my_realloc(void* ptr, size_t size) {
-    ptr = realloc(ptr, size);
-    return ptr;
+    void* ptr1 = malloc(size);
+    memcpy(ptr1, ptr, 100);
+    free(ptr);
+    return ptr1;
 }
 int main() {
 
-    void* p = malloc(100);
-    p = my_realloc(p, 200);
+    char* p1 = malloc(100);
+    void* p2 = my_realloc(p1, 200);
+    *p1 = 'a';
+    printf("%016lx\n", p1);
     return 0;
     
 }
