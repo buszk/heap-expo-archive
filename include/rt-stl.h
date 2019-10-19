@@ -12,25 +12,41 @@
 template <typename T>
 class he_allocator {
 public:
-    typedef T value_type;
     he_allocator() = default;
     
     template <typename U> constexpr 
     he_allocator(const he_allocator<U>&) noexcept {}
-
-    T* allocate(size_t n) {
-        if(n > size_t(-1) / sizeof(T)) throw std::bad_alloc();
-        if(auto p = static_cast<T*>(__malloc(n*sizeof(T)))) return p;
+    
+    typedef T value_type;
+    typedef T* pointer;
+    typedef const T* const_pointer;
+    typedef T& reference;
+    typedef const T& const_reference;
+    typedef std::size_t size_type ;
+    typedef std::ptrdiff_t difference_type; 
+    
+    template <typename _Tp1>
+    struct rebind {
+        typedef he_allocator<_Tp1> other;
+    };
+    
+    pointer allocate(size_t n) {
+        if(n > size_t(-1) / sizeof(value_type)) throw std::bad_alloc();
+        if(auto p = static_cast<pointer>(__malloc(n*sizeof(value_type)))) return p;
         throw std::bad_alloc();
     };
+
+    void construct(pointer p, const_reference val) { new((void*)p) T(val); }
+
+    void deallocate(pointer p, std::size_t) noexcept { __free(p); }
+
+    void destroy(pointer p) noexcept { p->~T(); }
 
     template <typename U>
     bool operator==(const he_allocator<U>&) {return true;}
     
     template <typename U>
     bool operator!=(const he_allocator<U>&) {return false;}
-
-    void deallocate(T* p, std::size_t) noexcept { __free(p); }
 };
 
 template <typename T>
