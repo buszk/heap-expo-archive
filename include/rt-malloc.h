@@ -1,9 +1,11 @@
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>
 #include "rt-include.h"
 
 #define powerof2(x)     ((((x) - 1) & (x)) == 0)
 
+extern "C" size_t malloc_usable_size (void *ptr);
 EXT_C void *malloc(size_t size) {
     void *res = __malloc(size);
     alloc_hook((char*)res, size);
@@ -23,8 +25,31 @@ EXT_C void free(void* ptr) {
 }
 
 EXT_C void* realloc(void* old_ptr, size_t new_size) {
-    void *res = __realloc(old_ptr, new_size);
-    realloc_hook((char*)old_ptr, (char*)res, new_size);
+    void *res = NULL;
+#if 0
+    //res = __realloc(old_ptr, new_size);
+    //realloc_hook((char*)old_ptr, (char*)res, new_size);
+#else
+    if (new_size == 0) {
+        __free(old_ptr);
+        dealloc_hook((char*)old_ptr);
+        res = NULL;
+    }
+    else if (!old_ptr) {
+        res = __malloc(new_size);
+        alloc_hook((char*)res, new_size);
+    }
+    else {
+        size_t old_size = malloc_usable_size(old_ptr);
+        res = __malloc(new_size);
+        alloc_hook((char*)res, new_size);
+        if (res) {
+            memcpy(res, old_ptr, (new_size > old_size) ? old_size: new_size);
+            __free(old_ptr);
+            dealloc_hook((char*)old_ptr);
+        }
+    }
+#endif
     return res;
 }
 

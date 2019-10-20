@@ -2,8 +2,8 @@
 #define RT_INCLUDE_H
 #include <new>  // std::bad_alloc()
 #include <shared_mutex>
-#include <cstring>
 
+#include "rt-memcpy.h"
 #include "rt-stl.h"
 #include "rt-libc.h"
 
@@ -18,8 +18,10 @@
 
 #if __x86_64__
 #define KADDR 0xffff800000000000
+#define RABIT 0x0000400000000000
 #else
 #define KADDR 0xc0000000
+#define RABIT 0x2000000
 #endif
     
 
@@ -72,6 +74,7 @@ struct object_info_t {
     edge_type                   in_edges  ;
     edge_type                   out_edges ;
     bool                        released  ;
+    bool                        copied    ;
 #ifdef MULTITHREADING
     std::shared_mutex           in_mutex  ;
     std::shared_mutex           out_mutex ;
@@ -86,6 +89,7 @@ struct object_info_t {
         in_edges = {};
         out_edges = {};
         released = false;
+        copied = false;
     }
 
     object_info_t (uintptr_t a, size_t s) {
@@ -96,6 +100,7 @@ struct object_info_t {
         in_edges = {};
         out_edges = {};
         released = false;
+        copied = false;
     }
 
     /* For global_hook */
@@ -106,6 +111,7 @@ struct object_info_t {
         in_edges = {};
         out_edges = {};
         released = false;
+        copied = false;
     }
 
     /* For alloc_hook */
@@ -137,6 +143,7 @@ struct object_info_t {
 #endif
         signature = copy.signature;
         released = false;
+        copied = false;
         return *this;
     }
 };

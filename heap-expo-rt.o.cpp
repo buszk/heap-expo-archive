@@ -1,12 +1,12 @@
+#define HEAP_EXPO_RT
+#define memcpy __memcpy
 #include <cstdio>
-#include <utility>
 #include <map>
 #include <set>
 #include <unordered_map>
 #include <assert.h>
 #include <unistd.h>
 #include <stdarg.h>
-#include "rt-memcpy.h"
 
 #define UNW_LOCAL_ONLY
 #if __x86_64__
@@ -921,8 +921,12 @@ EXT_C void checkstackvar(char* ptr_loc_, uint32_t id) {
 
 EXT_C void memcpy_hook(char* dst_, char*src_, size_t num) {
 
+    if (!memory_objects)
+        return;
+
     uintptr_t src = (uintptr_t) src_;
     uintptr_t dst = (uintptr_t) dst_;
+
     auto src_obj = memory_objects->find(src);
     auto dst_obj = memory_objects->find(dst);
 
@@ -935,4 +939,3 @@ EXT_C void memcpy_hook(char* dst_, char*src_, size_t num) {
     }
 }
 
-#undef PRINTF
