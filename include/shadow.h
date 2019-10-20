@@ -71,6 +71,9 @@ class shadow {
             S *res;
             if (!cur_page || cur_space < n) {
                 MMAP_ALLOC(cur_page, PAGE_SIZE);
+                if (!cur_page) {
+                    printf("mmap() failed!\n");
+                }
                 cur_space = N;
                 cur_ptr = (S*) cur_page;
                 //pages.push_back(cur_page);
@@ -110,7 +113,7 @@ class shadow {
                 //printf("cleanup %lx[%x/%x] level: %d\n", list[i].u.next, i,NUM_CHILD_LEVEL(level +1), level+1);
                 cleanup(LIST_NODE_NEXT(list, i), level + 1);
                 //printf("freeing %lx\n", list[i].u.next);
-                __free(LIST_NODE_NEXT(list, i));
+                //__free(LIST_NODE_NEXT(list, i));
                 SET_LIST_NODE_NEXT(list, i, nullptr);
             }
         }
