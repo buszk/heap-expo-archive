@@ -17,11 +17,13 @@
     new(ptr) type
 
 #if __x86_64__
-#define KADDR 0xffff800000000000
-#define RABIT 0x0000400000000000
+#define KADDR  0xffff800000000000
+#define RABIT  0x0000400000000000
+#define STKBIT 0x0000200000000000
 #else
-#define KADDR 0xc0000000
-#define RABIT 0x2000000
+#define KADDR  0xc0000000
+#define RABIT  0x20000000
+#define STKBIT 0x10000000
 #endif
     
 

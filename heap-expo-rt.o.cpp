@@ -18,6 +18,10 @@
 #include <link.h>
 #include <dlfcn.h>
 
+#include <stdio.h>
+#include <execinfo.h>
+#include <stdlib.h>
+
 #include "rt-malloc.h"
 #include "rt-include.h"
 #include "shadow.h"
@@ -149,18 +153,32 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg)
 {
     uintptr_t addr = (uintptr_t) si->si_addr;
     if ((addr & KADDR) == KADDR) {
-        if (addr & RABIT) {
-            PRINTF(1, "[HeapExpo] Use-after-reallocation detected: %016lx\n", addr);
-        }
-        else {
-            PRINTF(1, "[HeapExpo] Use-after-deallocation detected: %016lx\n", addr);
-        }
-        exit(139);
+        PRINTF(1, "[HeapExpo] Use-after-%s with %s ptr detected: %016lx\n", 
+                (addr & RABIT) ? "reallocation": "deallocation", 
+                (addr & STKBIT) ? "stack": "heap", addr);
     }
     else {
         PRINTF(1, "[HeapExpo] Unknown segfault: %016lx\n", addr);
-        exit(139);
     }
+    //raise(SIGSEGV);
+    char **messages = NULL;
+    void *array[16];
+    int size;
+    size = backtrace(array, 12);
+    messages = backtrace_symbols(array, size);
+    for (int i = 0; i < size; i++) {
+        printf("[bt] #%d %s ", i, messages[i]);
+        fflush(stdout);
+
+        int p = 0;
+        while (messages[i][p] != '(' && messages[i][p] != ' '
+                && messages[i][p] != 0)
+            p++;
+        char syscom[256];
+        sprintf(syscom, "addr2line %p -e %.*s", array[i], p, messages[i]);
+        if(system(syscom)) {}
+    }
+    exit(139);
 }
 #endif
 
@@ -497,7 +515,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         
         /* Value did not change, set it to kernel space */
         if (invalidate)
-            *(uintptr_t*)ptr_loc = cur_val | (KADDR | (obj->copied ? RABIT: 0)); 
+            *(uintptr_t*)ptr_loc = ( cur_val | KADDR | (obj->copied ? RABIT: 0) | STKBIT ) - STKBIT; 
 
         PRINTF(3, "[HeapExpo][invalidate]: ptr_loc:%016lx value:%016lx\n", ptr_loc, ptr_info->value);
         tmp.push_back(residual_pointer_t(ptr_loc, *(uintptr_t*)ptr_loc,
@@ -550,7 +568,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         for (auto &p: stack_record->list) {
             if (p.dst_info == obj && p.val == *(uintptr_t*)p.loc) {
                 if (invalidate_mode > 1) {
-                    *(uintptr_t*)p.loc |= (KADDR | (obj->copied ? RABIT: 0)); 
+                    *(uintptr_t*)p.loc |= (KADDR | (obj->copied ? RABIT: 0) | STKBIT); 
                     PRINTF(3, "[HeapExpo][invalidate_stack]: ptr_loc:%016lx value:%016lx\n", p.loc, p.val);
 
                 }
