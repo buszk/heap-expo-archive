@@ -1,6 +1,6 @@
-CC  = clang-7
-CXX = clang++-7
-LLVM_CONFIG ?= llvm-config-7
+CC  = clang
+CXX = clang++
+LLVM_CONFIG = llvm-config
 
 CFLAGS     ?= -O2 -funroll-loops
 CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign 
@@ -8,7 +8,7 @@ CXXFLAGS   ?= -O2 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 			 -Wno-variadic-macros -std=c++17
 
-LD_FLAGS   += -rdynamic -ldl
+LDFLAGS   += -rdynamic -ldl -lpthread
 
 LTOFLAG     = 
 CXXLTOFLAG  =
@@ -20,7 +20,7 @@ MTFLAG      = -DMULTITHREADING
 INST_LFL    = $(LDFLAGS) heap-expo-rt.o -lstdc++ # force c++ linker
 
 CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFLAGS) -Iinclude
-CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
+CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS) -fno-rtti
 
 TEST_PROGS  = list-test shadow-test
 
@@ -31,7 +31,7 @@ PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so $(LTOFLAG)
 all: $(PROGS)
 
 heap-expo-clang: heap-expo-clang.cpp
-	$(CXX) $(CXXFLAGS) $(CXXLTOFLAG) $< -o $@ 
+	$(CXX) $(CXXFLAGS) $(CXXLTOFLAG) $(LDFLAGS) $< -o $@ 
 	ln -sf heap-expo-clang heap-expo-clang++
 
 LLVMHeapExpo.so: heap-expo-pass.cpp
@@ -97,4 +97,4 @@ test_time: $(PROGS)
 	echo "Overhead for compiling test-instr-cxx.cpp is $$((100*t/b))%, base is $$((b)), our compiler takes $$((t))"
 
 clean:
-	rm -f $(PROGS) ./test-instr ./test-instr-cxx ./heap-expo-clang++
+	rm -f $(PROGS) *.o ./test-instr ./test-instr-cxx ./heap-expo-clang++

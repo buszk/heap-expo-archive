@@ -93,6 +93,7 @@ int main(int argc, char** argv) {
         if (add_object) {
 
             std::string suffix;
+            
             if (multi_threading)
                 suffix = "-mt.o";
             else
@@ -131,27 +132,37 @@ int main(int argc, char** argv) {
     _argv = argv;
     while (--_argc) {
         std::string cur(*(++_argv)); 
+
+        if (cur == "-fsanitize=address" || 
+            cur == "-fsanitize-address-use-after-scope") 
+            continue;
 #ifdef LTO
         /* Sanitize optimization level for lto */
         if (maybe_linking && (cur == "-Os"|| cur == "-Oz"))
             params.push_back("-O2");
         else 
             params.push_back(cur);
+
 #else 
+
         if (cur != "-flto")
             params.push_back(cur);
+
 #endif
+
     }
+
+    params.push_back("-g");
 
     cc_params = new char*[params.size() + 2];
 
     /* Choose a clang compiler */
     if (argv0.find("heap-expo-clang++") != std::string::npos) {
         alt_cxx = getenv("HEAP_EXPO_CXX");
-        cc_params[0] = alt_cxx ? alt_cxx : (char*)"clang++-7";
+        cc_params[0] = alt_cxx ? alt_cxx : (char*)"clang++";
     } else {
         alt_cc = getenv("HEAP_EXPO_CC");
-        cc_params[0] = alt_cc ? alt_cc : (char*)"clang-7";
+        cc_params[0] = alt_cc ? alt_cc : (char*)"clang";
     }
 
     for (int i = 0; i < params.size(); i++) {

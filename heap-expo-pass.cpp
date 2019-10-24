@@ -29,6 +29,8 @@
 #include <vector>
 #include <set>
 #include <unordered_set>
+#include <map>
+#include <unordered_map>
 #include <list>
 #include <algorithm>
 
@@ -163,14 +165,16 @@ struct HeapExpoGlobalTracker : public ModulePass {
         DL = &(M->getDataLayout());
         if (!DL)
             LOG(LVL_ERROR) << "Data Layout required\n";
-
-        GlobalHookFunc = (Function*)M->getOrInsertFunction("global_hook", VoidTy(M), Int8PtrTy(M), SizeTy(M));
+        
+        M->getOrInsertFunction("global_hook", VoidTy(M), Int8PtrTy(M), SizeTy(M));
+        GlobalHookFunc = M->getFunction("global_hook");
         
         doInitialization(Mod);
 
         std::string CtorFuncName = "init_global_vars_" + M->getModuleIdentifier();
 
-        Function *CtorFunc = (Function*) M->getOrInsertFunction(CtorFuncName, VoidTy(M));
+        M->getOrInsertFunction(CtorFuncName, VoidTy(M));
+        Function *CtorFunc = M->getFunction(CtorFuncName);
 
         addToGlobalCtors(M, CtorFunc);
 
@@ -439,23 +443,28 @@ struct HeapExpoFuncTracker : public FunctionPass  {
     
     void initialize(Module *M) { 
 
-        Constant *deregptr_def = M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
+        M->getOrInsertFunction("deregptr", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
+        Constant *deregptr_def = M->getFunction("deregptr");
         deregptr = cast<Function>(deregptr_def);
         deregptr->setCallingConv(CallingConv::C);
         
-        Constant *regptr_def = M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
+        M->getOrInsertFunction("regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
+        Constant *regptr_def = M->getFunction("regptr");
         regptr = cast<Function>(regptr_def);
         regptr->setCallingConv(CallingConv::C);
         
-        Constant *stack_regptr_def = M->getOrInsertFunction("stack_regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
+        M->getOrInsertFunction("stack_regptr", VoidTy(M), Int8PtrTy(M), Int8PtrTy(M), Int32Ty(M));
+        Constant *stack_regptr_def = M->getFunction("stack_regptr");
         stack_regptr = cast<Function>(stack_regptr_def);
         stack_regptr->setCallingConv(CallingConv::C);
         
-        Constant *voidcallstack_def = M->getOrInsertFunction("voidcallstack", VoidTy(M));
+        M->getOrInsertFunction("voidcallstack", VoidTy(M));
+        Constant *voidcallstack_def = M->getFunction("voidcallstack");
         voidcallstack = cast<Function>(voidcallstack_def);
         voidcallstack->setCallingConv(CallingConv::C);
 
-        Constant *checkstackvar_def = M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
+        M->getOrInsertFunction("checkstackvar", VoidTy(M), Int8PtrTy(M), Int32Ty(M));
+        Constant *checkstackvar_def = M->getFunction("checkstackvar"); 
         checkstackvar = cast<Function>(checkstackvar_def);
         checkstackvar->setCallingConv(CallingConv::C);
 
@@ -950,7 +959,7 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
                 StoreInst *SI = dyn_cast<StoreInst> (I);
 
                 
-                if (SI->getValueOperand()->getType()->isPointerTy()) {
+                if (SI && SI->getValueOperand() && SI->getValueOperand()->getType()->isPointerTy()) {
                 
                     AllocaInst *AI = getStackPtr(SI->getPointerOperand());
                     if (AI)  {
@@ -1071,11 +1080,12 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
         for (AllocaInst* AI : aset) {
             for (StoreInst* SI: stores_to_instr[AI]) {
                 instrStackReg(SI);
+                SI->setVolatile(true);
                 stack_store_instr_cnt++;
             }
         }
-        */
 
+        */
         stack_ptrs.clear();
         calls_to_instr.clear();
         return false;
