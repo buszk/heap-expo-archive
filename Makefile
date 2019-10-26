@@ -6,14 +6,14 @@ CFLAGS     ?= -O2 -funroll-loops
 CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign 
 CXXFLAGS   ?= -O2 -funroll-loops
 CXXFLAGS   += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
-			 -Wno-variadic-macros -std=c++17
+			 -Wno-variadic-macros -std=c++14
 
 LDFLAGS   += -rdynamic -ldl -lpthread
 
 LTOFLAG     = 
 CXXLTOFLAG  =
 
-RTFLAGS     = $(LTOFLAG) -Iinclude
+RTFLAGS     = $(LTOFLAG) -Iinclude -g 
 
 MTFLAG      = -DMULTITHREADING
 

@@ -91,9 +91,9 @@ using s2dtype = he_unordered_map<uint32_t, uint32_t>;
 ESP_ST s2dtype *sig2dbg;
 
 #ifdef MULTITHREADING
-//ESP_ST shared_mutex obj_mutex;
-//ESP_ST shared_mutex ptr_mutex;
-ESP_ST shared_mutex sig_mutex;
+//ESP_ST mutex obj_mutex;
+//ESP_ST mutex ptr_mutex;
+ESP_ST mutex sig_mutex;
 #endif
 
 /* STATISTICS */
@@ -375,13 +375,13 @@ inline void update_residual_loc(uintptr_t oldloc, uintptr_t newloc) {
     }
 }
 
-inline void address2offset(uintptr_t* array, int cnt) {
+inline void address2offset(uintptr_t *addrs, uintptr_t *offsets, int cnt) {
     for (int i = 0; i < cnt ; i++) {
         Dl_info info;
-        if (dladdr((void*)array[i], &info) &&
+        if (dladdr((void*)addrs[i], &info) &&
                 info.dli_fname != NULL && info.dli_fname[0] != '\0')  {
-            int64_t diff = array[i] - (uintptr_t)info.dli_fbase;
-            array[i] = diff;
+            int64_t diff = addrs[i] - (uintptr_t)info.dli_fbase;
+            offsets[i] = diff;
         }
     }
 }
@@ -394,9 +394,11 @@ inline uint32_t get_signature() {
     /* ignore this func, hook, and malloc/free */
     int cnt = -3;
     int size = 8;
-    void *array[8] = {0};
+    void *addrs[8] = {0};
+    void *offsets[8] = {0};
     uint32_t sig = 0;
     uint32_t res = 0;
+    bool newsig = false;
 
     unw_cursor_t cursor;
     unw_context_t uc;
@@ -407,36 +409,35 @@ inline uint32_t get_signature() {
     while (unw_step(&cursor) > 0 && cnt < size) {
         unw_get_reg(&cursor, UNW_REG_IP, &ip);
         if (++cnt >= 0) {
-            array[cnt] = (void*)ip;
+            addrs[cnt] = (void*)ip;
         }
     }
 
-    sig = hash_addr_list((uintptr_t*)array, cnt);
-    SLOCK(sig_mutex);
+    sig = hash_addr_list((uintptr_t*)addrs, cnt);
+
+    LOCK(sig_mutex);
     if (sig2dbg->find(sig) == sig2dbg->end()) {
-        SUNLOCK(sig_mutex);
 
-        if (print_mode >= 2) {
-            backtrace_symbols_fd(array, cnt, fdcopy);
-        }
+        newsig = true;
 
-        /* Update array from addresses to offsets */
-        address2offset((uintptr_t*)array, cnt);
+        address2offset((uintptr_t*)addrs, (uintptr_t*)offsets, cnt);
 
-        res = hash_addr_list((uintptr_t*) array, cnt);
+        res = hash_addr_list((uintptr_t*)offsets, cnt);
 
-        PRINTF(2, "SIG[%08x][%d]:\n", res, cnt);
-
-        LOCK(sig_mutex);
         (*sig2dbg)[sig] = res;
-        UNLOCK(sig_mutex);
 
     } else {
 
         res = sig2dbg->at(sig);
-        SUNLOCK(sig_mutex);
 
     }
+    UNLOCK(sig_mutex);
+    
+    if (newsig && print_mode >= 2) {
+        PRINTF(2, "SIG[%08x][%d]:\n", res, cnt);
+        backtrace_symbols_fd(addrs, cnt, fdcopy);
+    }
+
     return sig;
 }
 
@@ -468,6 +469,7 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     n_dealloc ++;
     struct object_info_t *obj = memory_objects->find(ptr);
 
+    memory_objects->insert_range(obj->addr, obj->size, nullptr);
 
     /* Not very likely but ptr may be allocated by other libraries */
     if (!obj) {
@@ -478,8 +480,12 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
     rtype tmp; 
     /* Invalidate ptrs that point to this heap object */
-    SLOCK(obj->in_mutex);
-    for (uintptr_t ptr_loc: obj->in_edges) {
+    LOCK(obj->in_mutex);
+    auto copy = obj->in_edges;
+    obj->in_edges.clear();
+    UNLOCK(obj->in_mutex);
+    //for (uintptr_t ptr_loc: obj->in_edges) {
+    for (uintptr_t ptr_loc: copy) {
         struct pointer_info_t *ptr_info = ptr_record->find(ptr_loc);
         if (!ptr_info) {
             PRINTF(3, "Cannot Find PTR[%016lx] in ptr_record\n", ptr_loc);
@@ -524,6 +530,9 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
 
         ptr_info->invalid = true;
     }
+    
+    obj->in_edges.clear();
+    //UNLOCK(obj->in_mutex);
 
     for (auto &p: tmp) 
         p.adj_cnt += tmp.size();
@@ -535,10 +544,6 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     residuals->merge(tmp, cntcmp);
 
 
-    SUNLOCK(obj->in_mutex);
-    LOCK(obj->in_mutex);
-    obj->in_edges.clear();
-    UNLOCK(obj->in_mutex);
 
     /* Erase ptrs in this heap object */
     for (uintptr_t ptr_loc: obj->out_edges) {
@@ -576,7 +581,6 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
         }
     }
 
-    memory_objects->insert_range(obj->addr, obj->size, nullptr);
     //__free(obj);
     
    

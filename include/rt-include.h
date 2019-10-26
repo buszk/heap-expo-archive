@@ -1,7 +1,7 @@
 #ifndef RT_INCLUDE_H
 #define RT_INCLUDE_H
 #include <new>  // std::bad_alloc()
-#include <shared_mutex>
+#include <mutex>
 
 #include "rt-memcpy.h"
 #include "rt-stl.h"
@@ -31,13 +31,9 @@
 #include <pthread.h>
 #define LOCK(mtx) mtx.lock()
 #define UNLOCK(mtx) mtx.unlock()
-#define SLOCK(mtx) mtx.lock_shared()
-#define SUNLOCK(mtx) mtx.unlock_shared()
 #else
 #define LOCK(mtx)
 #define UNLOCK(mtx)
-#define SLOCK(mtx)
-#define SUNLOCK(mtx)
 #endif
 
 #define alias(name, aliasname) _alias(name, aliasname)
@@ -78,9 +74,8 @@ struct object_info_t {
     bool                        released  ;
     bool                        copied    ;
 #ifdef MULTITHREADING
-    std::shared_mutex           in_mutex  ;
-    std::shared_mutex           out_mutex ;
-    std::shared_mutex           stack_mutex ;
+    std::mutex                  in_mutex  ;
+    std::mutex                  out_mutex ;
 #endif
     
     object_info_t () {
@@ -139,9 +134,8 @@ struct object_info_t {
         new(&in_edges) edge_type;
         new(&out_edges) edge_type;
 #ifdef MULTITHREADING
-        new(&in_mutex) std::shared_mutex;
-        new(&out_mutex) std::shared_mutex;
-        new(&stack_mutex) std::shared_mutex;
+        new(&in_mutex) std::mutex;
+        new(&out_mutex) std::mutex;
 #endif
         signature = copy.signature;
         released = false;
