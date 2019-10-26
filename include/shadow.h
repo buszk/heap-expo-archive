@@ -2,8 +2,6 @@
 #include <unistd.h>
 #include "rt-include.h"
 #include <mutex>
-#include <sys/mman.h>
-#include <fcntl.h>
 
 #define NUM_CHILD 256
 #ifdef __x86_64__ // 48-bit addressing
@@ -39,52 +37,18 @@
 #define GET_LIST_NODE_DATA(r, l, i)     LIST_OVERFLOW_CHECK(l, i); r = l[i].u.data
 #define GET_LIST_NODE_LEAF(r, l, i)     LIST_OVERFLOW_CHECK(l, i); r = l[i].leaf
 
-#define INIT_LIST_NODE_NEXT(a, l, i, n)    l[i].u.next = a.allocate(n)
+#define INIT_LIST_NODE_NEXT(l, i, n)    l[i].u.next = (node*)__calloc(sizeof(node), n)
 
 #ifdef MULTITHREADING
 #define LIST_NODE_LOCK(l, i)            l[i].lock.lock()
 #define LIST_NODE_UNLOCK(l, i)          l[i].lock.unlock()
 #endif
 
-#define MMAP_ALLOC(p, size) \
-    int fd = open("/dev/zero", O_RDWR); \
-    p = mmap(0, size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0); \
-    close(fd); 
-
 extern "C" size_t malloc_usable_size (void *ptr);
-
 
 template<class T>
 class shadow {
 
-    template <class S>
-    class __allocator {
-        const size_t N = 65536;
-        const size_t PAGE_SIZE = N*sizeof(S);
-        //std::list<void*> pages;
-        void*  cur_page  = nullptr;
-        S*     cur_ptr   = nullptr;
-        size_t cur_space = 0;
-    public:
-
-        S* allocate(size_t n) {
-            S *res;
-            if (!cur_page || cur_space < n) {
-                MMAP_ALLOC(cur_page, PAGE_SIZE);
-                if (!cur_page) {
-                    printf("mmap() failed!\n");
-                }
-                cur_space = N;
-                cur_ptr = (S*) cur_page;
-                //pages.push_back(cur_page);
-            }
-            res = cur_ptr;
-            cur_ptr += n;
-            cur_space -= n;
-            return res;
-        }
-
-    };
     typedef struct node {
         union {
             node* next;
@@ -97,7 +61,6 @@ class shadow {
     } node;
 
     node root[NUM_CHILD] = {};
-    __allocator<node> __alloc;
 
     void cleanup(node* list, int level) {
         //printf("cleanup %lx[%x] level: %d\n", list, NUM_CHILD_LEVEL(level), level);
@@ -113,7 +76,7 @@ class shadow {
                 //printf("cleanup %lx[%x/%x] level: %d\n", list[i].u.next, i,NUM_CHILD_LEVEL(level +1), level+1);
                 cleanup(LIST_NODE_NEXT(list, i), level + 1);
                 //printf("freeing %lx\n", list[i].u.next);
-                //__free(LIST_NODE_NEXT(list, i));
+                __free(LIST_NODE_NEXT(list, i));
                 SET_LIST_NODE_NEXT(list, i, nullptr);
             }
         }
@@ -152,7 +115,7 @@ void shadow<T>::insert(uintptr_t addr, T* meta) {
             LIST_NODE_LOCK(cur, c);
             if (!LIST_NODE_NEXT(cur, c)) {
 #endif
-                INIT_LIST_NODE_NEXT(__alloc, cur, c, NUM_CHILD_LEVEL(i+1));
+                INIT_LIST_NODE_NEXT(cur, c, NUM_CHILD_LEVEL(i+1));
                 SET_LIST_NODE_LEAF(cur, c, 0);
 #ifdef MULTITHREADING
             }
@@ -257,7 +220,7 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
             //write(2, "lock\n", 5);
             if (!LIST_NODE_NEXT(cur, j)) {
 #endif
-                INIT_LIST_NODE_NEXT(__alloc, cur, j, NUM_CHILD_LEVEL(level+1));
+                INIT_LIST_NODE_NEXT(cur, j, NUM_CHILD_LEVEL(level+1));
                 SET_LIST_NODE_LEAF(cur, j, 0);
 #ifdef MULTITHREADING
             }
