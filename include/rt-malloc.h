@@ -3,6 +3,10 @@
 #include <string.h>
 #include "rt-include.h"
 
+#ifdef memcpy
+#undef memcpy
+#endif
+
 #define powerof2(x)     ((((x) - 1) & (x)) == 0)
 
 extern "C" size_t malloc_usable_size (void *ptr);
@@ -98,3 +102,4 @@ EXT_C int posix_memalign(void** memptr, size_t alignment, size_t size) {
     }
     return ENOMEM;
 }
+#define memcpy __memcpy

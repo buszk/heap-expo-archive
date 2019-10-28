@@ -7,11 +7,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <dlfcn.h>
+#include <string.h>
 extern "C" void memcpy_hook(char*, char*, size_t);
 
 #ifdef memcpy
 #undef memcpy
-#define memcpy memcpy
 #endif
 
 extern "C" 
@@ -28,7 +28,9 @@ void* memcpy(void* dst, const void* src, size_t num) noexcept {
     memcpy_hook((char*)dst, (char*)src, num);
     return NULL;
 }
-#undef memcpy
+extern void* __memcpy(void*, const void*, size_t) noexcept;
+
 #define memcpy __memcpy
+
 #endif
 #endif
