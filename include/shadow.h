@@ -27,21 +27,29 @@
 #define LIST_OVERFLOW_CHECK(l, i)
 #endif
 #define LIST_NODE(l, i)                 l[i]
-#define LIST_NODE_NEXT(l, i)            l[i].u.next
 #define LIST_NODE_DATA(l, i)            l[i].u.data
 #define LIST_NODE_LEAF(l, i)            l[i].leaf
-#define SET_LIST_NODE_NEXT(l, i, v)     LIST_OVERFLOW_CHECK(l, i); l[i].u.next = v
 #define SET_LIST_NODE_DATA(l, i, v)     LIST_OVERFLOW_CHECK(l, i); l[i].u.data = v
 #define SET_LIST_NODE_LEAF(l, i, v)     LIST_OVERFLOW_CHECK(l, i); l[i].leaf = v
-#define GET_LIST_NODE_NEXT(r, l, i)     LIST_OVERFLOW_CHECK(l, i); r = l[i].u.next
 #define GET_LIST_NODE_DATA(r, l, i)     LIST_OVERFLOW_CHECK(l, i); r = l[i].u.data
 #define GET_LIST_NODE_LEAF(r, l, i)     LIST_OVERFLOW_CHECK(l, i); r = l[i].leaf
 
-#define INIT_LIST_NODE_NEXT(l, i, n)    l[i].u.next = (node*)__calloc(sizeof(node), n)
+
 
 #ifdef MULTITHREADING
-#define LIST_NODE_LOCK(l, i)            l[i].lock.lock()
-#define LIST_NODE_UNLOCK(l, i)          l[i].lock.unlock()
+#include <atomic>
+#define LIST_NODE_NEXT(l, i)            l[i].u.next.load()
+#define SET_LIST_NODE_NEXT(l, i, v)     LIST_OVERFLOW_CHECK(l, i); l[i].u.next.store(v, std::memory_order_release)
+#define GET_LIST_NODE_NEXT(r, l, i)     LIST_OVERFLOW_CHECK(l, i); r = l[i].u.next.load(std::memory_order_acquire)
+#define INIT_LIST_NODE_NEXT(l, i, n)    \
+    node* tmp = (node*)__calloc(sizeof(node), n); \
+    node* null_node = nullptr; \
+    if(!l[i].u.next.compare_exchange_weak(null_node, tmp)) __free(tmp)
+#else
+#define LIST_NODE_NEXT(l, i)            l[i].u.next
+#define SET_LIST_NODE_NEXT(l, i, v)     LIST_OVERFLOW_CHECK(l, i); l[i].u.next = v
+#define GET_LIST_NODE_NEXT(r, l, i)     LIST_OVERFLOW_CHECK(l, i); r = l[i].u.next
+#define INIT_LIST_NODE_NEXT(l, i, n)    l[i].u.next = (node*)__calloc(sizeof(node), n)
 #endif
 
 extern "C" size_t malloc_usable_size (void *ptr);
@@ -51,13 +59,14 @@ class shadow {
 
     typedef struct node {
         union {
+#ifdef MULTITHREADING
+            std::atomic<node*> next;
+#else
             node* next;
+#endif
             T* data;
         } u;
         uint8_t leaf;
-#ifdef MULTITHREADING
-        std::mutex lock; // lock for pointer
-#endif
     } node;
 
     node root[NUM_CHILD] = {};
@@ -112,14 +121,12 @@ void shadow<T>::insert(uintptr_t addr, T* meta) {
         LIST_OVERFLOW_CHECK(cur, c);
         if (!LIST_NODE_NEXT(cur, c)) {
 #ifdef MULTITHREADING
-            LIST_NODE_LOCK(cur, c);
             if (!LIST_NODE_NEXT(cur, c)) {
 #endif
                 INIT_LIST_NODE_NEXT(cur, c, NUM_CHILD_LEVEL(i+1));
                 SET_LIST_NODE_LEAF(cur, c, 0);
 #ifdef MULTITHREADING
             }
-            LIST_NODE_UNLOCK(cur, c);
 #endif
         }
         GET_LIST_NODE_NEXT(cur, cur, c);
@@ -216,7 +223,6 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
         }
         else if(!LIST_NODE_NEXT(cur, j)) {
 #ifdef MULTITHREADING
-            LIST_NODE_LOCK(cur, j);
             //write(2, "lock\n", 5);
             if (!LIST_NODE_NEXT(cur, j)) {
 #endif
@@ -224,7 +230,6 @@ void shadow<T>::insert_range_level(uintptr_t start, uintptr_t end, T* meta,
                 SET_LIST_NODE_LEAF(cur, j, 0);
 #ifdef MULTITHREADING
             }
-            LIST_NODE_UNLOCK(cur, j);
             //write(2, "unlock\n", 7);
 #endif
         }
