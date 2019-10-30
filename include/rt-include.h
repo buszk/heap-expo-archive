@@ -62,7 +62,7 @@ UNUSED static const char* getTypeString(int typeVal) {
     return memory_type_strings[typeVal];
 }
 
-using edge_type = he_list<std::pair<uintptr_t, bool>>;
+using edge_type = he_list<uintptr_t>;
 
 struct object_info_t {
     uintptr_t                   addr      ;
