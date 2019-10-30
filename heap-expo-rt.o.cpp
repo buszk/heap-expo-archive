@@ -890,6 +890,10 @@ EXT_C void deregptr(char* ptr_loc_, uint32_t id) {
 
 }
 
+EXT_C void initcallstack() {
+
+}
+
 EXT_C void voidcallstack() {
 
     uintptr_t sp;
