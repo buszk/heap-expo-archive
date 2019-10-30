@@ -469,12 +469,12 @@ inline void dealloc_hook_(uintptr_t ptr, uint32_t free_sig, bool invalidate) {
     n_dealloc ++;
     struct object_info_t *obj = memory_objects->find(ptr);
 
-    memory_objects->insert_range(obj->addr, obj->size, nullptr);
-
     /* Not very likely but ptr may be allocated by other libraries */
     if (!obj) {
         return;
     }
+
+    memory_objects->insert_range(obj->addr, obj->size, nullptr);
 
     PRINTF(3, "[HeapExpo][dealloc_sig]: Object %016lx:%016lx is allocated with signature %08lx\n", obj->addr, obj->size, obj->signature);
 
