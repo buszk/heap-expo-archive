@@ -8,27 +8,27 @@
 #include <stdio.h>
 #include <dlfcn.h>
 #include <string.h>
-extern "C" void memcpy_hook(char*, char*, size_t);
+extern "C" void memcpy_hook(char *, char *, size_t);
 
 #ifdef memcpy
 #undef memcpy
 #endif
 
-extern "C" 
-void* memcpy(void* dst, const void* src, size_t num) noexcept {
-    static void*(*__memcpy)(void*, const void*, size_t) = NULL;
+extern "C" void *memcpy(void *dst, const void *src, size_t num) noexcept {
+    static void *(*__memcpy)(void *, const void *, size_t) = NULL;
     if (!__memcpy) {
-        __memcpy = (void* (*)(void*, const void*, size_t)) dlsym(RTLD_NEXT, "memcpy");
+        __memcpy =
+            (void *(*)(void *, const void *, size_t))dlsym(RTLD_NEXT, "memcpy");
         if (!__memcpy) {
             fprintf(stderr, "Error in `dlsym`: %s\n", dlerror());
             exit(1);
         }
     }
     __memcpy(dst, src, num);
-    memcpy_hook((char*)dst, (char*)src, num);
+    memcpy_hook((char *)dst, (char *)src, num);
     return NULL;
 }
-extern void* __memcpy(void*, const void*, size_t) noexcept;
+extern void *__memcpy(void *, const void *, size_t) noexcept;
 
 #define memcpy __memcpy
 
