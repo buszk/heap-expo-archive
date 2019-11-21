@@ -13,7 +13,7 @@ LDFLAGS   += -rdynamic -ldl -lpthread
 LTOFLAG     = 
 CXXLTOFLAG  =
 
-RTFLAGS     = $(LTOFLAG) -Iinclude -g 
+RTFLAGS     = $(LTOFLAG) -Iinclude -g -fheinous-gnu-extensions
 
 MTFLAG      = -DMULTITHREADING
 

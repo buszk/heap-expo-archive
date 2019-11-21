@@ -6,6 +6,7 @@
 #include "rt-memcpy.h"
 #include "rt-stl.h"
 #include "rt-libc.h"
+#include "linkedlist.h"
 
 #define EXT_C extern "C"
 #define UNUSED __attribute__((unused))
@@ -62,7 +63,8 @@ UNUSED static const char* getTypeString(int typeVal) {
     return memory_type_strings[typeVal];
 }
 
-using edge_type = he_list<uintptr_t>;
+using edge_type = llist<uintptr_t, he_allocator<node<uintptr_t>>>;
+using edge_it   = node<uintptr_t>*;
 
 struct object_info_t {
     uintptr_t                   addr      ;
@@ -152,7 +154,7 @@ struct pointer_info_t {
     bool                  invalid  ;
     struct object_info_t *src_info ,
                          *dst_info ;
-    edge_type::iterator   src_it   ,
+    edge_it               src_it   ,
                           dst_it   ;
     uint32_t              id       ;
 
@@ -170,7 +172,7 @@ struct pointer_info_t {
 
     pointer_info_t (uintptr_t l, uintptr_t v, uintptr_t s, uintptr_t d,
             struct object_info_t *si, struct object_info_t *di, 
-            edge_type::iterator sit, edge_type::iterator dit,
+            edge_it sit, edge_it dit,
             uint32_t i) {
         loc = l;
         value = v;
