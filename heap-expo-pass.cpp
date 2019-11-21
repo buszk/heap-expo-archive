@@ -1385,7 +1385,11 @@ static void registerMyPass(const PassManagerBuilder &,
 
 static void registerMyPassEarly(const PassManagerBuilder &,
                                 legacy::PassManagerBase &PM) {
+<<<<<<< HEAD
 #ifdef HEAPO_FULL
+=======
+#ifdef HEXPO_FULL
+>>>>>>> 0da73be... feature: Add fast version compilation
     PM.add(new HeapExpoStackTracker());
     PM.add(new HeapExpoHeapTracker());
 #endif

@@ -34,10 +34,10 @@ heap-expo-clang: heap-expo-clang.cpp
 	ln -sf heap-expo-clang heap-expo-clang++
 
 LLVMHeapExpo.so: heap-expo-pass.cpp
-	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL) -DHEAPO_FULL
+	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL) -DHEXPO_FULL
 
 LLVMHeapExpoFast.so: heap-expo-pass.cpp
-	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL) -DHEAPO_FAST
+	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL) -DHEXPO_FAST
 
 obj/heap-expo-rt.o: heap-expo-rt.o.cpp 
 	mkdir -p obj
