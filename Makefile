@@ -23,7 +23,7 @@ CLANG_CFL   = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fpic $(CXXFL
 CLANG_LFL   = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS) -fno-rtti
 
 OBJS        = obj/heap-expo-rt.o obj/heap-expo-rt-32.o obj/heap-expo-rt-64.o 
-PROGS       = heap-expo-clang LLVMHeapExpo.so afl-heap-expo-map $(OBJS) $(TEST_PROGS) 
+PROGS       = heap-expo-clang LLVMHeapExpo.so $(OBJS) $(TEST_PROGS) 
 
 PASS_CFL    = -Xclang -load -Xclang ./LLVMHeapExpo.so $(LTOFLAG)
 
@@ -35,9 +35,6 @@ heap-expo-clang: heap-expo-clang.cpp
 
 LLVMHeapExpo.so: heap-expo-pass.cpp
 	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
-
-afl-heap-expo-map: afl-heap-expo-map.cpp
-	$(CXX) $(CXXFLAGS) $< -o $@ -Iinclude
 
 obj/heap-expo-rt.o: heap-expo-rt.o.cpp 
 	mkdir -p obj
