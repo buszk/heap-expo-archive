@@ -1071,12 +1071,13 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
 
         getStoreInstructionLiveness(F, calls_to_instr, aset, stores_to_instr);
 
+        /*
         for (StoreInst* SI: stores) {
             instrStackReg(SI);
             SI->setVolatile(true);
             stack_store_instr_cnt++;
         }
-        /*
+        */
         for (AllocaInst* AI : aset) {
             for (StoreInst* SI: stores_to_instr[AI]) {
                 instrStackReg(SI);
@@ -1085,7 +1086,6 @@ struct HeapExpoStackTracker : public HeapExpoFuncTracker, public CallGraphAnalys
             }
         }
 
-        */
         stack_ptrs.clear();
         calls_to_instr.clear();
         return false;

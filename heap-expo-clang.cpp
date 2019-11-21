@@ -101,11 +101,11 @@ int main(int argc, char** argv) {
                 
             switch (bit_mode) {
                 case 0:
-                    params.push_back(obj_path + "/heap-expo-rt" + suffix);
+                    params.push_back(obj_path + "/obj/heap-expo-rt" + suffix);
                     break;
 
                 case 32:
-                    params.push_back(obj_path + "/heap-expo-rt-32" + suffix);
+                    params.push_back(obj_path + "/obj/heap-expo-rt-32" + suffix);
                     if (access(params[params.size()-1].c_str(), R_OK)) {
                         std::cerr << "-m32 is not supported by your compiler\n";
                         return 1;
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
                     break;
 
                 case 64:
-                    params.push_back(obj_path + "/heap-expo-rt-64" + suffix);
+                    params.push_back(obj_path + "/obj/heap-expo-rt-64" + suffix);
                     if (access(params[params.size()-1].c_str(), R_OK)) {
                         std::cerr << "-m64 is not supported by your compiler\n";
                         return 1;
