@@ -44,16 +44,7 @@
 
 using namespace std;
 
-#define AFL
 #define CATCHERRORS
-
-#ifdef AFL
-#include "afl-include.h"
-#include <fstream>
-#include <sys/shm.h>
-ESP_ST char  __heap_expo_initial[HE_MAP_SIZE];
-ESP_ST char* __heap_expo_ptr = __heap_expo_initial;
-#endif 
 
 #ifdef CATCHERRORS
 #include <signal.h>
@@ -182,23 +173,6 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg)
 }
 #endif
 
-void __heap_expo_shm() {
-
-    char *id_str = getenv(HE_SHM_ENV_VAR);
-
-    if (id_str) {
-        uint32_t shm_id = atoi(id_str);
-
-        __heap_expo_ptr = (char*)shmat(shm_id, NULL, 0);
-
-        if (__heap_expo_ptr == (void*)-1) exit(1);
-
-        __heap_expo_ptr[0] = 1;
-
-    }
-    
-}
-
 inline bool is_invalid(uintptr_t addr) {
     return ((addr & KADDR) == KADDR);
 }
@@ -265,11 +239,6 @@ void __attribute__((constructor (1))) init_rt(void) {
 	sa.sa_flags   = SA_SIGINFO;
 	sigaction(SIGSEGV, &sa, NULL);
 #endif
-
-#ifdef AFL
-    __heap_expo_shm();
-#endif
-
     he_initialized = true;
 }
 
@@ -305,11 +274,6 @@ inline void report_dangling(residual_pointer_t &ptr) {
             ptr.free_sig, counter - ptr.counter);
 
     status = 99;
-
-#ifdef AFL
-    if (__heap_expo_ptr != __heap_expo_initial)
-        __heap_expo_ptr[(ptr.store_id/8) % HE_MAP_SIZE] |= (1 << ptr.store_id % 8);
-#endif
 
 }
 
