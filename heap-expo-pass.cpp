@@ -1377,14 +1377,18 @@ static RegisterPass<HeapExpoLoop> V("HeapExpoLoop", "HeapExpo Loop Optimizer",
 static void registerMyPass(const PassManagerBuilder &,
                            legacy::PassManagerBase &PM) {
     PM.add(new HeapExpoGlobalTracker());
-    // PM.add(new HeapExpoHeapTracker());
-    // PM.add(new HeapExpoStackTracker());
+#ifdef HEXPO_FAST
+    PM.add(new HeapExpoHeapTracker());
+    PM.add(new HeapExpoStackTracker());
+#endif
 }
 
 static void registerMyPassEarly(const PassManagerBuilder &,
                                 legacy::PassManagerBase &PM) {
+#ifdef HEAPO_FULL
     PM.add(new HeapExpoStackTracker());
     PM.add(new HeapExpoHeapTracker());
+#endif
     // PM.add(new HeapExpoLoop());
 
     // PM.add(new HeapExpoCallGraphAnalysis());

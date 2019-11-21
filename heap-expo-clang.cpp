@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
     params.push_back("-Xclang");
     params.push_back("-load");
     params.push_back("-Xclang");
-    params.push_back(obj_path + "/LLVMHeapExpo.so");
+    params.push_back(obj_path + (getenv("HEXPO_FAST") ? "/LLVMHeapExpoFast.so" : "/LLVMHeapExpo.so"));
 
     /* Keep frame pointer for unwind */
     params.push_back("-fno-omit-frame-pointer");
